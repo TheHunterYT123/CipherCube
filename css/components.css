@@ -3,7 +3,7 @@
    ========================================================= */
 
 /* ---- Bottom nav ---- */
-.bottom-nav{flex-shrink:0;position:relative;display:grid;grid-template-columns:1fr 1fr 64px 1fr 1fr;align-items:flex-end;
+.bottom-nav{flex-shrink:0;position:relative;z-index:20;display:grid;grid-template-columns:1fr 1fr 64px 1fr 1fr;align-items:flex-end;
   height:84px;padding:0 0 calc(18px + env(safe-area-inset-bottom));background:var(--color-surface-translucent);backdrop-filter:blur(14px);border-top:1px solid var(--color-border);overflow:visible;}
 .bottom-nav .tab-btn[data-screen="inicio"]{grid-column:1;}
 .bottom-nav .tab-btn[data-screen="crear"]{grid-column:2;}
