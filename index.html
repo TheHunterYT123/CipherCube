@@ -1,0 +1,386 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover">
+<title>CipherCube</title>
+<meta name="description" content="Cifrado físico sin nube: convierte una contraseña, frase semilla o documento en un cubo de colores cifrado con AES-256-GCM, PBKDF2 y corrección Reed-Solomon.">
+<meta name="theme-color" content="#FFFFFF">
+<link rel="manifest" href="manifest.json">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="CipherCube">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png">
+<link rel="icon" href="icons/icon-192.png">
+<script>
+(function(){
+  try{
+    var stored = localStorage.getItem('ciphercube-theme');
+    var theme = (stored === 'light' || stored === 'dark') ? stored
+      : (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+    document.documentElement.setAttribute('data-theme', theme);
+  } catch(_){ document.documentElement.setAttribute('data-theme','light'); }
+})();
+</script>
+<link rel="stylesheet" href="css/base.css">
+<link rel="stylesheet" href="css/theme.css">
+<link rel="stylesheet" href="css/components.css">
+<link rel="stylesheet" href="css/animations.css">
+</head>
+<body>
+
+<div class="app-shell">
+  <div class="screen-area">
+
+    <!-- ============ INICIO ============ -->
+    <div class="screen" id="screen-inicio">
+      <div class="brand-row">
+        <img class="brand-logo logo-light-only" src="assets/logo-black.png" alt="">
+        <img class="brand-logo logo-dark-only" src="assets/logo-white.png" alt="">
+        <div class="h1">CipherCube</div>
+      </div>
+      <div class="tagline">Cifrado físico. Sin nube, sin servidores.</div>
+      <p class="lead">Convierte una contraseña, frase semilla o documento en un patrón de colores cifrado, pensado para vivir en un cubo físico — no en internet.</p>
+      <div class="mini-preview"><canvas id="miniPreview" width="58" height="58"></canvas><input type="text" id="miniInput" placeholder="Escribe algo de prueba…" maxlength="60"></div>
+
+      <div class="h2">Cómo funciona</div>
+      <div class="card" style="padding:4px 18px;">
+        <div class="step-row"><div class="step-num">1</div><div><h4>Tu frase maestra</h4><p>Se convierte en una clave de 256 bits.<div class="tag-mono">PBKDF2-SHA256 · 600,000 iter.</div></p></div></div>
+        <div class="step-row"><div class="step-num">2</div><div><h4>Cifrado autenticado</h4><p>Si algo se altera, el sistema lo nota.<div class="tag-mono">AES-256-GCM</div></p></div></div>
+        <div class="step-row"><div class="step-num">3</div><div><h4>Corrección de errores</h4><p>Tolera manchas o rayones físicos sin perder el contenido.<div class="tag-mono">Reed-Solomon, GF(256)</div></p></div></div>
+        <div class="step-row"><div class="step-num">4</div><div><h4>Volumen oculto</h4><p>Una frase señuelo revela algo falso; solo la real revela tu secreto.</p></div></div>
+        <div class="step-row"><div class="step-num">5</div><div><h4>Reparto Shamir</h4><p>Divide tu frase entre varios cubos — ninguno solo basta.</p></div></div>
+        <div class="step-row"><div class="step-num">6</div><div><h4>Tu cubo</h4><p>El resultado se convierte en color. Imprímelo, pégalo, guárdalo.</p></div></div>
+      </div>
+
+      <div class="h2">En qué se diferencia</div>
+      <table class="compare-table">
+        <tr><th></th><th>Cubo</th><th>QR</th><th>USB</th><th>Nube</th></tr>
+        <tr><td>Sin internet</td><td class="me">✓</td><td>✓</td><td>✓</td><td class="no">—</td></tr>
+        <tr><td>Resiste agua/golpes</td><td class="me">✓</td><td class="no">—</td><td class="no">—</td><td>✓</td></tr>
+        <tr><td>Corrige daño físico</td><td class="me">✓</td><td class="no">parcial</td><td class="no">—</td><td>✓</td></tr>
+        <tr><td>Negación bajo presión</td><td class="me">✓</td><td class="no">—</td><td class="no">—</td><td class="no">—</td></tr>
+        <tr><td>Repartible (K-de-N)</td><td class="me">✓</td><td class="no">—</td><td class="no">—</td><td class="no">—</td></tr>
+      </table>
+
+      <div class="h2">Para qué puedes usarlo</div>
+      <div class="use-grid">
+        <div class="use-item"><b>Frases semilla y wallets</b>Guarda frases de recuperación cripto sin depender de internet ni de dispositivos conectados.</div>
+        <div class="use-item"><b>Contraseñas críticas</b>Protege credenciales importantes, notas privadas o claves maestras con recuperación física.</div>
+        <div class="use-item"><b>Herencias digitales</b>Permite compartir recuperación mediante Shamir entre familiares o personas de confianza.</div>
+        <div class="use-item"><b>Custodia compartida</b>Divide secretos entre múltiples personas, de forma que nadie pueda recuperarlos por separado.</div>
+      </div>
+      <div class="footnote">El cifrado (AES-256-GCM, PBKDF2-SHA256), la codificación a color, la corrección Reed-Solomon y la corrección de perspectiva por homografía corren siempre en tu dispositivo. Para fotos reales del cubo, ajusta las esquinas manualmente sobre la imagen.</div>
+    </div>
+
+    <!-- ============ CREAR ============ -->
+    <div class="screen hidden" id="screen-crear">
+      <div class="h1 small">Crear</div>
+      <div class="segmented"><button class="seg-crear active" data-target="crear-cubo">Cubo</button><button class="seg-crear" data-target="crear-boveda">Bóveda</button></div>
+
+      <div id="crear-cubo">
+        <div id="crearFormFields">
+          <label class="field-label">Capacidad</label>
+          <div class="chip-row" id="tierOptions">
+            <div class="chip selected" data-tier="mini"><div class="cname">Mini</div><div class="ccap">1024 B</div></div>
+            <div class="chip" data-tier="estandar"><div class="cname">Estándar</div><div class="ccap">2880 B</div></div>
+            <div class="chip" data-tier="pro"><div class="cname pro-cname">Pro</div><div class="ccap">6464 B</div></div>
+          </div>
+
+          <div class="field">
+            <label class="field-label">Tu secreto</label>
+            <div class="textarea-wrap">
+              <textarea id="secretText" placeholder="Contraseña, frase semilla, notas…"></textarea>
+              <button class="clip-btn" id="attachFilesBtn" type="button" title="Adjuntar archivos" aria-label="Adjuntar archivos">
+                <svg viewBox="0 0 24 24"><path d="M8 12.5 14 6.5a3.2 3.2 0 0 1 4.5 4.5l-7 7a4.8 4.8 0 0 1-6.8-6.8l6.6-6.6"/></svg>
+              </button>
+            </div>
+            <div class="capacity-badge" id="secretCounter"></div>
+            <input type="file" id="secretFilesInput" multiple style="display:none;">
+            <div class="hint" id="attachHint">Se cifran junto con tu secreto y restan espacio disponible.</div>
+            <div class="file-list" id="secretFilesList"></div>
+          </div>
+
+          <div class="field"><label class="field-label">Frase maestra</label><input type="text" id="realPass" placeholder="al menos 6 caracteres, varias palabras"><div class="hint">No la guardamos en ningún lado. Si la olvidas, no hay recuperación — por diseño.</div></div>
+
+          <div class="lock-zone" id="hiddenZone">
+            <div class="toggle-row" id="hiddenToggleRow">
+              <div><div class="ttitle">Volumen oculto</div><div class="tdesc">Negación plausible con frase señuelo</div></div>
+              <label class="switch"><input type="checkbox" id="hiddenToggle"><span class="sl"></span></label>
+            </div>
+            <div class="hidden-fields" id="hiddenFields">
+              <div class="field" style="margin-bottom:0;"><label class="field-label">Frase señuelo</label><input type="text" id="decoyPass" placeholder="otra frase distinta"></div>
+              <div class="field" style="margin-bottom:0;"><label class="field-label">Contenido señuelo</label><textarea id="decoyText" placeholder="ej. contraseñas viejas sin importancia"></textarea></div>
+            </div>
+          </div>
+
+          <button class="btn btn-primary" id="generateBtn" style="margin-top:8px;">Generar cubo cifrado</button>
+        </div>
+
+        <div class="result-view hidden" id="resultView">
+          <div class="result-canvas-wrap"><canvas class="cube-canvas" id="generateCanvas"></canvas></div>
+          <div class="master-phrase-card">
+            <div class="mp-warn">⚠ Guarda esta frase maestra</div>
+            <div class="mp-value" id="mpValue">••••••••••</div>
+            <div class="mp-actions">
+              <button type="button" id="mpCopyBtn">Copiar</button>
+              <button type="button" id="mpToggleBtn">Mostrar</button>
+            </div>
+          </div>
+          <div class="result-actions">
+            <button class="btn btn-secondary" id="downloadBtn">Descargar lámina</button>
+            <button class="btn btn-secondary" id="download3dBtn">Descargar caras 3D (escaneables)</button>
+            <button class="btn btn-secondary" id="viewInfoBtn">Ver información</button>
+            <button class="btn btn-ghost" id="createAnotherBtn">Crear otro cubo</button>
+          </div>
+          <div class="hint" style="margin-top:10px;text-align:center;max-width:300px;">La lámina sirve para imprimir o guardar plana. Las “caras 3D” traen marcas para escanear el cubo cara por cara con la cámara.</div>
+        </div>
+      </div>
+
+      <div id="crear-boveda" style="display:none;">
+        <div class="lock-zone" id="bovedaZone">
+          <div id="bovedaUnlocked">
+            <p class="lead" style="margin-bottom:16px;">Reparte tu frase maestra en N partes; solo se necesitan K para reconstruirla.</p>
+            <div class="field"><label class="field-label">Frase a repartir</label><input type="text" id="shamirPass" placeholder="tu frase maestra real"></div>
+            <div style="display:flex;gap:12px;">
+              <div class="field" style="flex:1;"><label class="field-label">Total (N)</label><input type="number" id="shamirN" value="5" min="2" max="20"></div>
+              <div class="field" style="flex:1;"><label class="field-label">Mínimas (K)</label><input type="number" id="shamirK" value="3" min="2" max="20"></div>
+            </div>
+            <button class="btn btn-primary" id="shamirSplitBtn">Generar partes</button>
+            <div class="share-grid" id="shareList"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ CÁMARA ============ -->
+    <div class="screen hidden" id="screen-camara">
+      <div class="h1 small">Descifrar</div>
+      <p class="lead" style="margin-bottom:16px;">Escanea tu cubo cara por cara. Coloca una cara dentro del recuadro; al detectarla se captura sola. Gira el cubo y repite hasta completar las 6.</p>
+
+      <div id="liveScanner">
+        <div class="viewfinder live-viewfinder" id="liveViewfinder">
+          <canvas id="liveCanvas"></canvas>
+          <div class="scan-frame">
+            <div class="corner c1"></div><div class="corner c2"></div><div class="corner c3"></div><div class="corner c4"></div>
+          </div>
+          <div class="scan-flash" id="scanFlash"></div>
+          <div class="scan-rotate" id="scanRotate">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.3-5.6"/><path d="M20 4v4h-4"/></svg>
+            <span>Gira el cubo</span>
+          </div>
+          <div class="scan-complete" id="scanComplete">✓ 6 / 6</div>
+          <div class="scan-status" id="scanStatus">Iniciando cámara…</div>
+        </div>
+        <div class="face-progress-row">
+          <div class="face-progress" id="faceProgress"></div>
+          <div class="face-count" id="faceCount">0 / 6</div>
+        </div>
+        <div class="cam-btn-row">
+          <button class="btn btn-secondary btn-sm" id="liveCaptureBtn">Capturar ahora</button>
+          <button class="btn btn-secondary btn-sm" id="liveResetBtn">Reiniciar escaneo</button>
+        </div>
+        <div class="field" style="margin-top:6px;"><label class="field-label">Tu frase</label><input type="text" id="liveDecodePass" placeholder="la frase maestra o la señuelo"></div>
+        <button class="btn btn-primary" id="liveDecodeBtn" disabled>Descifrar (faltan 6)</button>
+        <div class="output-box hidden" id="liveDecodeOutput"><div class="reveal-box" id="liveDecodeReveal"></div></div>
+      </div>
+
+      <div class="collapse-trigger" id="uploadTrigger"><span>¿Tienes una lámina o imagen del cubo? Súbela</span><span id="uploadArrow">▾</span></div>
+      <div class="collapse-body" id="uploadBody">
+        <p class="hint" style="margin-bottom:12px;">Para un PNG generado por CipherCube la capacidad se detecta sola; para una foto real, ajusta las 4 esquinas.</p>
+        <div id="vfBeforeImage">
+          <div class="viewfinder" id="viewfinder">
+            <div class="corner c1"></div><div class="corner c2"></div><div class="corner c3"></div><div class="corner c4"></div>
+            <div class="placeholder-text">Apunta o sube la imagen de tu cubo</div>
+          </div>
+          <div class="cam-btn-row">
+            <button class="btn btn-secondary" id="takePhotoBtn">📷 Tomar foto</button>
+            <button class="btn btn-secondary" id="uploadPhotoBtn">Subir imagen</button>
+          </div>
+        </div>
+        <input type="file" id="cameraCaptureInput" accept="image/*" capture="environment" style="display:none;">
+        <input type="file" id="uploadFileInput" accept="image/*" style="display:none;">
+
+        <div id="vfAfterImage" style="display:none;">
+          <div id="calibrateWrap"><img id="calibImg"></div>
+          <div class="calib-hint" id="decodeAutoHint">Detectando capacidad automáticamente.</div>
+          <button class="btn btn-secondary btn-sm" id="retakeBtn" style="margin-bottom:16px;">Usar otra imagen</button>
+
+          <label class="field-label" style="display:none;">¿Qué capacidad es este cubo?</label>
+          <div class="chip-row" id="decodeTierOptions" style="margin-bottom:18px;display:none;">
+            <div class="chip" data-tier="mini"><div class="cname">Mini</div></div>
+            <div class="chip selected" data-tier="estandar"><div class="cname">Estándar</div></div>
+            <div class="chip" data-tier="pro"><div class="cname">Pro</div></div>
+          </div>
+
+          <div class="field"><label class="field-label">Tu frase</label><input type="text" id="decodePass" placeholder="la frase maestra o la señuelo"></div>
+          <button class="btn btn-primary" id="decodeBtn">Descifrar</button>
+          <div class="output-box hidden" id="decodeOutput"><div class="reveal-box" id="decodeReveal"></div></div>
+        </div>
+      </div>
+
+      <div class="collapse-trigger" id="reconstructTrigger"><span>¿Tu frase está repartida en partes (Bóveda)?</span><span id="reconstructArrow">▾</span></div>
+      <div class="collapse-body" id="reconstructBody">
+        <p class="hint" style="margin-bottom:12px;">Escanea cada parte cara por cara (como un cubo) o sube su imagen. Junta al menos K partes y se reconstruye sola.</p>
+
+        <div id="shareLiveScanner">
+          <div class="viewfinder live-viewfinder" id="shareLiveViewfinder">
+            <canvas id="shareLiveCanvas"></canvas>
+            <div class="scan-frame">
+              <div class="corner c1"></div><div class="corner c2"></div><div class="corner c3"></div><div class="corner c4"></div>
+            </div>
+            <div class="scan-flash" id="shareScanFlash"></div>
+            <div class="scan-rotate" id="shareScanRotate">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.3-5.6"/><path d="M20 4v4h-4"/></svg>
+              <span>Gira la parte</span>
+            </div>
+            <div class="scan-complete" id="shareScanComplete">✓ 6 / 6</div>
+            <div class="scan-status" id="shareScanStatus">Iniciando cámara…</div>
+          </div>
+          <div class="face-progress-row">
+            <div class="face-progress" id="shareFaceProgress"></div>
+            <div class="face-count" id="shareFaceCount">0 / 6</div>
+          </div>
+          <div class="cam-btn-row">
+            <button class="btn btn-secondary btn-sm" id="shareLiveCaptureBtn">Capturar ahora</button>
+            <button class="btn btn-secondary btn-sm" id="shareLiveResetBtn">Reiniciar parte</button>
+          </div>
+          <button class="btn btn-primary" id="shareLiveAddBtn" disabled>Agregar parte (faltan 6)</button>
+        </div>
+
+        <div class="collapse-trigger" id="shareUploadTrigger" style="margin-top:14px;"><span>¿Tienes la parte como imagen?</span><span id="shareUploadArrow">▾</span></div>
+        <div class="collapse-body" id="shareUploadBody">
+          <button class="btn btn-secondary btn-sm" id="addShareBtn" style="margin:12px 0 10px;">Añadir imágenes de partes</button>
+          <input type="file" id="shareFilesInput" accept="image/png" multiple style="display:none;">
+        </div>
+
+        <p class="field-label" style="margin-top:16px;">Partes reunidas</p>
+        <div id="shareUploadList"></div>
+        <button class="btn btn-primary" id="shamirReconstructBtn">Reconstruir frase</button>
+        <div class="output-box hidden" id="reconstructOutput"><div class="reveal-box" id="reconstructReveal"></div></div>
+      </div>
+    </div>
+
+    <!-- ============ TIENDA ============ -->
+    <div class="screen hidden" id="screen-tienda">
+      <div class="h1 small">Tienda</div>
+      <div class="segmented"><button class="seg-tienda active" data-target="tienda-app">Software</button><button class="seg-tienda" data-target="tienda-kits">Kits físicos</button></div>
+
+      <div id="tienda-app">
+        <div class="price-row" data-plan="free">
+          <div class="price-top"><div class="pname">Básico</div><div class="pval">Gratis</div></div>
+          <div class="price-desc">Para empezar y para descifrar, siempre.</div>
+          <div class="price-feats"><div>Descifrar cualquier cubo, sin límite</div><div>Crear cubos simples</div><div>Sin volumen oculto</div><div>Capacidad Mini</div></div>
+          <button class="btn btn-sm plan-btn" data-plan="free">Plan actual</button>
+        </div>
+        <div class="price-row" data-plan="plus">
+          <div class="price-top"><div class="pname">Plus <span class="badge">POPULAR</span></div><div class="pval"><span class="old-price">$24</span>$19 pago único</div></div>
+          <div class="launch-note">Precio de lanzamiento</div>
+          <div class="price-desc">Negación plausible para lo que de verdad importa.</div>
+          <div class="price-feats"><div>Todo lo de Básico</div><div>Volumen oculto (señuelo + real)</div><div>Capacidad Estándar y Pro</div><div>Actualizaciones futuras incluidas</div></div>
+          <button class="btn btn-sm plan-btn" data-plan="plus">Obtener Plus</button>
+        </div>
+        <div class="price-row" data-plan="boveda">
+          <div class="price-top"><div class="pname">Bóveda <span class="badge">MEJOR VALOR</span></div><div class="pval"><span class="old-price">$49</span>$39 pago único</div></div>
+          <div class="launch-note">Precio de lanzamiento</div>
+          <div class="price-desc">Para herencias digitales, recuperación familiar y custodia compartida.</div>
+          <div class="price-feats"><div>Todo lo de Plus</div><div>Reparto Shamir entre cubos (K-de-N)</div><div>Múltiples conjuntos de recuperación</div><div>Custodia compartida de secretos</div><div>Soporte prioritario</div></div>
+          <button class="btn btn-sm plan-btn" data-plan="boveda">Obtener Bóveda</button>
+        </div>
+      </div>
+
+      <div id="tienda-kits" style="display:none;">
+        <div class="price-row unavailable" data-kit="mini-kit">
+          <div class="price-top"><div class="pname">Kit Mini</div><div class="pval">$28</div></div>
+          <div class="price-desc">Cartulina rígida, armable en minutos. Producción física en preparación.</div>
+          <div class="price-feats"><div>Cuerpo de cartulina 2mm</div><div>Vinil resistente UV en blanco</div><div>Plantilla de armado</div></div>
+          <button class="btn btn-sm btn-secondary kit-btn" data-kit="Kit Mini" disabled>Próximamente</button>
+        </div>
+        <div class="price-row unavailable" data-kit="estandar-kit">
+          <div class="price-top"><div class="pname">Kit Estándar <span class="badge">POPULAR</span></div><div class="pval">$50</div></div>
+          <div class="price-desc">Acrílico cortado a láser, el equilibrio ideal. Lista de espera próximamente.</div>
+          <div class="price-feats"><div>6 piezas de acrílico 4mm</div><div>Vinil UV de alta densidad</div><div>Empaque premium</div></div>
+          <button class="btn btn-sm btn-secondary kit-btn" data-kit="Kit Estándar" disabled>Próximamente</button>
+        </div>
+        <div class="price-row unavailable" data-kit="pro-kit">
+          <div class="price-top"><div class="pname">Kit Pro</div><div class="pval">$80</div></div>
+          <div class="price-desc">Aluminio anodizado. Agua, golpes, fuego parcial. Aún no disponible para venta.</div>
+          <div class="price-feats"><div>6 placas de aluminio anodizado</div><div>Vinil UV ultra densidad</div><div>Empaque de lujo</div></div>
+          <button class="btn btn-sm btn-secondary kit-btn" data-kit="Kit Pro" disabled>Próximamente</button>
+        </div>
+      </div>
+      <div class="footnote">El secreto nunca pasa por nuestros servidores en ningún plan: el cifrado ocurre siempre en tu dispositivo.</div>
+    </div>
+
+    <!-- ============ PERFIL ============ -->
+    <div class="screen hidden" id="screen-perfil">
+      <div id="perfilOnboard" style="display:none;">
+        <div class="onboard-card">
+          <img class="brand-logo logo-light-only" src="assets/logo-black.png" alt="">
+          <img class="brand-logo logo-dark-only" src="assets/logo-white.png" alt="">
+          <h3>Bienvenido a CipherCube</h3>
+          <p>¿Cómo te llamas? Esto solo vive en esta sesión del navegador.</p>
+          <input type="text" id="onboardName" placeholder="Tu nombre" style="margin-bottom:12px;">
+          <button class="btn btn-primary" id="onboardSaveBtn">Continuar</button>
+        </div>
+      </div>
+
+      <div id="perfilMain" style="display:none;">
+        <div class="avatar" id="avatarCircle">?</div>
+        <div class="h1 small" id="profileName">—</div>
+        <div class="tagline" id="profilePlanTag">Plan Básico</div>
+
+        <div class="card" style="padding:4px 18px;">
+          <div class="profile-row"><div class="prlabel">Plan actual</div><div class="prval" id="profilePlanVal">Básico</div></div>
+          <div class="profile-row"><div class="prlabel">Cubos creados</div><div class="prval" id="profileCubeCount">0</div></div>
+          <div class="profile-row"><div class="prlabel">Pedidos de kits</div><div class="prval" id="profileOrderCount">0</div></div>
+          <div class="profile-row"><div><div class="prlabel">Modo oscuro</div><div class="hint" style="margin-top:2px;">Cambia el tema de toda la app.</div></div><label class="switch"><input type="checkbox" id="themeToggle"><span class="sl"></span></label></div>
+        </div>
+
+        <div class="h2">Historial de cubos</div>
+        <div id="myCubesList"><div class="hint">Aún no has creado ningún cubo.</div></div>
+
+        <div class="h2">Mis pedidos</div>
+        <div id="myOrdersList"><div class="hint">Aún no has pedido ningún kit.</div></div>
+
+        <button class="btn btn-secondary" id="goToTiendaBtn" style="margin-top:22px;">Administrar plan en Tienda</button>
+        <button class="btn btn-secondary" id="resetSessionBtn" style="margin-top:10px;">Reiniciar sesión</button>
+        <div class="footnote">El nombre, el plan y los pedidos son de esta sesión del navegador y se reinician al recargar. El historial de cubos generados se guarda solo en este dispositivo (localStorage) y nunca incluye tu frase maestra ni el contenido del secreto.</div>
+      </div>
+    </div>
+
+  </div>
+
+  <nav class="bottom-nav">
+    <button class="tab-btn active" data-screen="inicio"><svg viewBox="0 0 24 24"><path d="M3 11.5 12 4l9 7.5"/><path d="M5.5 10v9a1 1 0 0 0 1 1H9a1 1 0 0 0 1-1v-4a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v4a1 1 0 0 0 1 1h2.5a1 1 0 0 0 1-1v-9"/></svg><span>Inicio</span></button>
+    <button class="tab-btn" data-screen="crear"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M12 8.5v7M8.5 12h7"/></svg><span>Crear</span></button>
+    <div class="tab-camera active" data-screen="camara"><svg viewBox="0 0 24 24"><path d="M4 8.5a1.5 1.5 0 0 1 1.5-1.5h2l1-2h7l1 2h2A1.5 1.5 0 0 1 20 8.5v9A1.5 1.5 0 0 1 18.5 19h-13A1.5 1.5 0 0 1 4 17.5z"/><circle cx="12" cy="12.5" r="3.4"/></svg></div>
+    <button class="tab-btn" data-screen="tienda"><svg viewBox="0 0 24 24"><path d="M6 8h12l-1 12H7z"/><path d="M9 8V6a3 3 0 0 1 6 0v2"/></svg><span>Tienda</span></button>
+    <button class="tab-btn" data-screen="perfil"><svg viewBox="0 0 24 24"><circle cx="12" cy="8.5" r="3.3"/><path d="M5 19.5c0-3.3 3.1-5.5 7-5.5s7 2.2 7 5.5"/></svg><span>Perfil</span></button>
+  </nav>
+
+  <div class="info-sheet-backdrop" id="infoSheetBackdrop">
+    <div class="info-sheet">
+      <div class="is-handle"></div>
+      <div class="is-title">Información del cubo</div>
+      <div class="is-row"><span class="is-label">Capacidad útil</span><span class="is-value" id="infoCapacity">—</span></div>
+      <div class="is-row"><span class="is-label">Grid</span><span class="is-value" id="infoGrid">—</span></div>
+      <div class="is-row"><span class="is-label">Versión de formato</span><span class="is-value" id="infoVersion">—</span></div>
+      <div class="is-row"><span class="is-label">Derivación de clave</span><span class="is-value" id="infoKdf">—</span></div>
+      <div class="is-row"><span class="is-label">Checksum (SHA-256)</span><span class="is-value" id="infoChecksum">—</span></div>
+      <div class="is-row"><span class="is-label">Frase maestra</span><span class="is-value" id="infoMasterPhrase">—</span></div>
+      <div class="tech-badges">
+        <span class="tech-badge">AES-256-GCM</span>
+        <span class="tech-badge">PBKDF2 600k</span>
+        <span class="tech-badge">Reed-Solomon</span>
+        <span class="tech-badge">Shamir GF(256)</span>
+      </div>
+      <button class="btn btn-primary" id="infoSheetClose" style="margin-top:18px;">Cerrar</button>
+    </div>
+  </div>
+</div>
+
+<script type="module" src="js/app.js"></script>
+</body>
+</html>

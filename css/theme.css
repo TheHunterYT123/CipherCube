@@ -1,0 +1,52 @@
+/* =========================================================
+   THEME — tokens de color. Todo color de la app vive aquí.
+   Cambiar de tema = cambiar el atributo data-theme en <html>.
+   ========================================================= */
+:root,
+[data-theme="light"] {
+  --color-bg: #FFFFFF;
+  --color-surface: #F5F5F7;
+  --color-surface-2: #EFEFEF;
+  --color-pill: #FFFFFF;
+  --color-border: #E6E6E8;
+
+  --color-text: #0A0A0A;
+  --color-text-secondary: #6E6E73;
+  --color-text-tertiary: #AEAEB2;
+  --color-text-quaternary: #D1D1D3;
+
+  --color-accent: #0A0A0A;
+  --color-on-accent: #FFFFFF;
+
+  --color-danger: #D55E00;
+  --color-danger-bg: rgba(213, 94, 0, 0.1);
+
+  --color-overlay-scrim: rgba(245, 245, 247, 0.85);
+  --color-surface-translucent: rgba(255, 255, 255, 0.96);
+  --shadow-pill: 0 1px 3px rgba(0, 0, 0, 0.12);
+  --shadow-elevated: 0 16px 40px rgba(0, 0, 0, 0.14);
+}
+
+[data-theme="dark"] {
+  --color-bg: #0A0A0A;
+  --color-surface: #1C1C1E;
+  --color-surface-2: #242426;
+  --color-pill: #3A3A3C;
+  --color-border: #2E2E30;
+
+  --color-text: #FFFFFF;
+  --color-text-secondary: #AEAEB2;
+  --color-text-tertiary: #8E8E93;
+  --color-text-quaternary: #48484A;
+
+  --color-accent: #FFFFFF;
+  --color-on-accent: #0A0A0A;
+
+  --color-danger: #FF9F4A;
+  --color-danger-bg: rgba(255, 159, 74, 0.14);
+
+  --color-overlay-scrim: rgba(10, 10, 10, 0.85);
+  --color-surface-translucent: rgba(20, 20, 22, 0.92);
+  --shadow-pill: 0 1px 3px rgba(0, 0, 0, 0.4);
+  --shadow-elevated: 0 16px 40px rgba(0, 0, 0, 0.5);
+}
