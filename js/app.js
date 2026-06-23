@@ -254,12 +254,23 @@ function buildFaceSheetCanvas(colorIndices, grid){
 }
 
 function initResultView(){
+  const downloadMenu = document.getElementById('downloadMenu');
+  document.getElementById('downloadMenuBtn').addEventListener('click', (e) => {
+    e.stopPropagation();
+    downloadMenu.classList.toggle('hidden');
+  });
+  document.addEventListener('click', (e) => {
+    if (!downloadMenu.classList.contains('hidden') && !document.getElementById('downloadDropdown').contains(e.target)){
+      downloadMenu.classList.add('hidden');
+    }
+  });
   document.getElementById('downloadBtn').addEventListener('click', () => {
     if (!lastGenerated) return;
     const link=document.createElement('a');
     link.download=`ciphercube-${lastGenerated.tier}.png`;
     link.href=lastGenerated.canvas.toDataURL('image/png');
     link.click();
+    downloadMenu.classList.add('hidden');
   });
   document.getElementById('download3dBtn').addEventListener('click', () => {
     if (!lastGenerated) return;
@@ -268,6 +279,7 @@ function initResultView(){
     link.download = `ciphercube-${lastGenerated.tier}-caras3d.png`;
     link.href = sheet.toDataURL('image/png');
     link.click();
+    downloadMenu.classList.add('hidden');
   });
   document.getElementById('viewInfoBtn').addEventListener('click', () => {
     if (!lastGenerated) return;

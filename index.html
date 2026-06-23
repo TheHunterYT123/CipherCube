@@ -129,12 +129,22 @@
             </div>
           </div>
           <div class="result-actions">
-            <button class="btn btn-secondary" id="downloadBtn">Descargar lámina</button>
-            <button class="btn btn-secondary" id="download3dBtn">Descargar caras 3D (escaneables)</button>
+            <div class="download-dropdown" id="downloadDropdown">
+              <button class="btn btn-secondary" id="downloadMenuBtn">Descargar ▾</button>
+              <div class="download-menu hidden" id="downloadMenu">
+                <button type="button" id="downloadBtn">
+                  <span class="dm-title">Lámina plana</span>
+                  <span class="dm-desc">Imagen única para imprimir o guardar.</span>
+                </button>
+                <button type="button" id="download3dBtn">
+                  <span class="dm-title">Caras 3D (escaneables)</span>
+                  <span class="dm-desc">Hoja con las 6 caras para armar y escanear con la cámara.</span>
+                </button>
+              </div>
+            </div>
             <button class="btn btn-secondary" id="viewInfoBtn">Ver información</button>
             <button class="btn btn-ghost" id="createAnotherBtn">Crear otro cubo</button>
           </div>
-          <div class="hint" style="margin-top:10px;text-align:center;max-width:300px;">La lámina sirve para imprimir o guardar plana. Las “caras 3D” traen marcas para escanear el cubo cara por cara con la cámara.</div>
         </div>
       </div>
 

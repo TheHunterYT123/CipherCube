@@ -186,6 +186,14 @@ canvas.cube-canvas{display:block;width:100%;height:auto;border-radius:14px;margi
 .result-view .result-canvas-wrap{width:100%;margin-bottom:18px;}
 .result-view .result-actions{display:flex;flex-direction:column;gap:10px;width:100%;margin-bottom:8px;}
 
+.download-dropdown{position:relative;width:100%;}
+.download-menu{position:absolute;left:0;right:0;top:calc(100% + 6px);background:var(--color-bg);border:1px solid var(--color-border);border-radius:12px;box-shadow:var(--shadow-elevated);padding:6px;z-index:10;display:flex;flex-direction:column;gap:2px;}
+.download-menu.hidden{display:none;}
+.download-menu button{width:100%;text-align:left;background:none;border:none;border-radius:9px;padding:9px 10px;cursor:pointer;display:flex;flex-direction:column;gap:2px;}
+.download-menu button:hover,.download-menu button:active{background:var(--color-surface);}
+.download-menu .dm-title{font-size:13px;font-weight:600;color:var(--color-text);}
+.download-menu .dm-desc{font-size:11px;color:var(--color-text-secondary);line-height:1.35;}
+
 .master-phrase-card{width:100%;background:var(--color-danger-bg);border:1.3px solid var(--color-danger);border-radius:14px;padding:16px;margin-bottom:18px;text-align:left;}
 .master-phrase-card .mp-warn{font-size:12.5px;font-weight:700;color:var(--color-danger);display:flex;align-items:center;gap:6px;margin-bottom:10px;}
 .master-phrase-card .mp-value{font-family:var(--mono);font-size:15px;font-weight:600;color:var(--color-text);background:var(--color-bg);border-radius:10px;padding:11px 13px;margin-bottom:10px;word-break:break-word;letter-spacing:0.02em;}
