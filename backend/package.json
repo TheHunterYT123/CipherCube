@@ -1,0 +1,31 @@
+{
+  "name": "ciphercube-backend",
+  "version": "1.0.0",
+  "description": "Backend de CipherCube: cuentas, perfiles, planes y pagos (Stripe, PayPal, MercadoPago).",
+  "type": "module",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "migrate": "node src/db/migrate.js",
+    "seed:plans": "node src/db/seedPlans.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@paypal/checkout-server-sdk": "^1.0.3",
+    "bcryptjs": "^2.4.3",
+    "cookie-parser": "^1.4.7",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.2",
+    "express-rate-limit": "^7.4.1",
+    "helmet": "^8.0.0",
+    "jsonwebtoken": "^9.0.2",
+    "mercadopago": "^2.0.15",
+    "pg": "^8.13.1",
+    "stripe": "^17.5.0",
+    "zod": "^3.24.1"
+  }
+}

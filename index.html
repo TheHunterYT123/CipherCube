@@ -333,10 +333,20 @@
         <div class="onboard-card">
           <img class="brand-logo logo-light-only" src="assets/logo-black.png" alt="">
           <img class="brand-logo logo-dark-only" src="assets/logo-white.png" alt="">
-          <h3>Bienvenido a CipherCube</h3>
-          <p>¿Cómo te llamas? Esto solo vive en esta sesión del navegador.</p>
-          <input type="text" id="onboardName" placeholder="Tu nombre" style="margin-bottom:12px;">
-          <button class="btn btn-primary" id="onboardSaveBtn">Continuar</button>
+          <h3>Tu cuenta CipherCube</h3>
+          <p>Inicia sesión o crea una cuenta para gestionar tu plan y tus compras.</p>
+          <div class="segmented auth-segmented">
+            <button class="seg-auth active" data-mode="login">Iniciar sesión</button>
+            <button class="seg-auth" data-mode="register">Crear cuenta</button>
+          </div>
+          <div class="field" id="authNameField" style="display:none;">
+            <input type="text" id="authName" placeholder="Tu nombre (opcional)">
+          </div>
+          <div class="field"><input type="email" id="authEmail" placeholder="Correo electrónico" autocomplete="email"></div>
+          <div class="field"><input type="password" id="authPassword" placeholder="Contraseña" autocomplete="current-password"></div>
+          <button class="btn btn-primary" id="authSubmitBtn">Iniciar sesión</button>
+          <div class="hint" id="authHint" style="margin-top:10px;color:var(--color-danger,#b03000);"></div>
+          <div class="footnote" style="margin-top:14px;">Tu contraseña protege tu cuenta y tus compras. Es independiente de la frase maestra que cifra tus cubos: esa nunca se envía ni se guarda en ningún servidor.</div>
         </div>
       </div>
 
@@ -359,8 +369,14 @@
         <div id="myOrdersList"><div class="hint">Aún no has pedido ningún kit.</div></div>
 
         <button class="btn btn-secondary" id="goToTiendaBtn" style="margin-top:22px;">Administrar plan en Tienda</button>
-        <button class="btn btn-secondary" id="resetSessionBtn" style="margin-top:10px;">Reiniciar sesión</button>
-        <div class="footnote">El nombre, el plan y los pedidos son de esta sesión del navegador y se reinician al recargar. El historial de cubos generados se guarda solo en este dispositivo (localStorage) y nunca incluye tu frase maestra ni el contenido del secreto.</div>
+        <button class="btn btn-secondary" id="changePassTrigger" style="margin-top:10px;">Cambiar contraseña</button>
+        <div class="collapse-body" id="changePassBody" style="margin-top:10px;">
+          <div class="field"><input type="password" id="currentPass" placeholder="Contraseña actual" autocomplete="current-password"></div>
+          <div class="field"><input type="password" id="newPass" placeholder="Nueva contraseña (mín. 8)" autocomplete="new-password"></div>
+          <button class="btn btn-primary btn-sm" id="changePassBtn">Guardar nueva contraseña</button>
+        </div>
+        <button class="btn btn-secondary" id="logoutBtn" style="margin-top:10px;">Cerrar sesión</button>
+        <div class="footnote">Tu plan y tus compras viven en tu cuenta (servidor). El historial de cubos se guarda solo en este dispositivo (localStorage) y nunca incluye tu frase maestra ni el contenido del secreto.</div>
       </div>
     </div>
 
@@ -393,8 +409,30 @@
       <button class="btn btn-primary" id="infoSheetClose" style="margin-top:18px;">Cerrar</button>
     </div>
   </div>
+
+  <!-- Hoja de pago -->
+  <div class="info-sheet-backdrop" id="paySheetBackdrop">
+    <div class="info-sheet">
+      <div class="is-handle"></div>
+      <div class="is-title" id="paySheetTitle">Comprar plan</div>
+      <div class="is-row">
+        <span class="is-label">Moneda</span>
+        <span class="seg-pay-row">
+          <button class="seg-pay active" data-cur="usd">USD</button>
+          <button class="seg-pay" data-cur="mxn">MXN</button>
+        </span>
+      </div>
+      <div id="payProviders" style="margin-top:14px;display:flex;flex-direction:column;gap:10px;"></div>
+      <div class="hint" id="payHint" style="margin-top:10px;"></div>
+      <div class="footnote" style="margin-top:6px;">Pago seguro a través del proveedor. CipherCube no almacena los datos de tu tarjeta.</div>
+      <button class="btn btn-secondary" id="paySheetClose" style="margin-top:14px;">Cancelar</button>
+    </div>
+  </div>
 </div>
 
+<!-- Configura aquí la URL de tu backend en producción, p. ej.:
+     <script>window.CIPHERCUBE_API_BASE = 'https://api.tudominio.com';</script>
+     Si lo dejas sin definir, usa http://localhost:4000 (desarrollo). -->
 <script type="module" src="js/app.js"></script>
 </body>
 </html>

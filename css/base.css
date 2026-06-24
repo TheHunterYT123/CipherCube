@@ -25,7 +25,7 @@ button{font-family:var(--font);}
 .footnote{font-size:10.5px;color:var(--color-text-tertiary);line-height:1.6;margin-top:22px;padding-top:16px;border-top:1px solid var(--color-border);}
 
 label.field-label{display:block;font-size:12px;font-weight:600;color:var(--color-text-secondary);margin-bottom:7px;text-transform:uppercase;letter-spacing:0.03em;}
-input[type=text],input[type=number],input[type=password],textarea{width:100%;background:var(--color-surface);border:1px solid var(--color-border);border-radius:12px;padding:13px 14px;font-size:15px;color:var(--color-text);font-family:var(--font);outline:none;}
+input[type=text],input[type=number],input[type=password],input[type=email],textarea{width:100%;background:var(--color-surface);border:1px solid var(--color-border);border-radius:12px;padding:13px 14px;font-size:15px;color:var(--color-text);font-family:var(--font);outline:none;}
 textarea{font-family:var(--mono);font-size:13px;min-height:78px;resize:vertical;}
 input:focus,textarea:focus{border-color:var(--color-accent);}
 input::placeholder,textarea::placeholder{color:var(--color-text-tertiary);}

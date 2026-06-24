@@ -16,6 +16,9 @@ import {
   initNavigation, showScreen, onScreenChange, applyTheme, setTheme,
   showToast, showError, armLockZone, openSheet, closeSheet, applyStagger,
 } from './ui.js';
+import {
+  initAuth, initAuthUI, setOnAuthChange, logout, changePassword, beginPurchase,
+} from './auth.js';
 import { initCamera, resetCameraScreen, stopShareScanner } from './camera.js';
 import { initLiveScanner, startLiveScanner, stopLiveScanner } from './camera-live.js';
 import { renderAllFaceTilesV2 } from './cube3d.js';
@@ -218,6 +221,21 @@ function initGenerate(){
     const decoyPass = document.getElementById('decoyPass').value;
     const decoyText = document.getElementById('decoyText').value;
     if (!typedSecretText.trim() && attachedSecretFiles.length===0) { showError('Escribe un secreto o adjunta al menos un archivo.'); return; }
+    // Validación de capacidad clara ANTES de cifrar: cubre texto + archivos juntos,
+    // y casos en que se cambió de tier después de adjuntar (p. ej. bajar a Mini).
+    const usedBytes = new TextEncoder().encode(secretText).length;
+    const maxBytes = maxSecretBytesForSelectedTier();
+    if (usedBytes > maxBytes){
+      const overKb = ((usedBytes - maxBytes) / 1024).toFixed(1);
+      const biggerTier = selectedTier === 'mini' ? 'Estándar o Pro' : (selectedTier === 'estandar' ? 'Pro' : null);
+      showError(
+        `El contenido pesa ${usedBytes} de ${maxBytes} bytes disponibles en ${TIERS[selectedTier].label} ` +
+        `(te sobran ~${overKb} KB). ` +
+        (biggerTier ? `Sube a capacidad ${biggerTier}, ` : '') +
+        `acorta el texto o quita algún archivo.`
+      );
+      return;
+    }
     if (!realPass || realPass.length<6) { showError('Tu frase maestra debe tener al menos 6 caracteres.'); return; }
     if (hiddenEnabled && (!decoyPass || decoyPass.length<6)) { showError('Define una frase señuelo de al menos 6 caracteres.'); return; }
     if (hiddenEnabled && decoyPass===realPass) { showError('La frase señuelo debe ser distinta de la real.'); return; }
@@ -429,9 +447,9 @@ function initTienda(){
     document.getElementById('tienda-kits').style.display = isApp?'none':'block';
   }));
   document.querySelectorAll('.plan-btn').forEach(btn => btn.addEventListener('click', () => {
-    appState.plan = btn.dataset.plan;
-    refreshPlanButtons(); refreshTierLocks(); syncHiddenToggleWithPlan();
-    updateSecretCounter();
+    const plan = btn.dataset.plan;
+    if (plan === 'free' || plan === appState.plan) return; // no se "compra" el gratis ni el actual
+    beginPurchase(plan);
   }));
   document.querySelectorAll('.kit-btn').forEach(btn => btn.addEventListener('click', () => {
     appState.myOrders.push({ name: btn.dataset.kit, ts: new Date() });
@@ -467,17 +485,30 @@ function renderPerfil(){
   });
 }
 function initPerfil(){
-  document.getElementById('onboardSaveBtn').addEventListener('click', () => {
-    const name = document.getElementById('onboardName').value.trim();
-    if (!name) return;
-    appState.userName = name; renderPerfil();
-  });
   document.getElementById('goToTiendaBtn').addEventListener('click', () => showScreen('tienda'));
   document.getElementById('themeToggle').addEventListener('change', e => setTheme(e.target.checked ? 'dark' : 'light'));
-  document.getElementById('resetSessionBtn').addEventListener('click', () => {
-    appState.userName=null; appState.plan='free'; appState.myOrders=[];
-    resetHistory();
-    refreshPlanButtons(); refreshTierLocks(); syncHiddenToggleWithPlan(); updateSecretCounter(); renderPerfil();
+
+  document.getElementById('changePassTrigger').addEventListener('click', () => {
+    document.getElementById('changePassBody').classList.toggle('show');
+  });
+  document.getElementById('changePassBtn').addEventListener('click', async () => {
+    const current = document.getElementById('currentPass').value;
+    const next = document.getElementById('newPass').value;
+    if (!current || !next){ showError('Completa ambos campos.'); return; }
+    const btn = document.getElementById('changePassBtn');
+    btn.disabled = true; const prev = btn.textContent; btn.innerHTML='<span class="spinner"></span> Guardando…';
+    try{
+      await changePassword(current, next);
+      document.getElementById('currentPass').value=''; document.getElementById('newPass').value='';
+      document.getElementById('changePassBody').classList.remove('show');
+      renderPerfil();
+    } catch(e){ showError(e.message); }
+    finally { btn.disabled=false; btn.textContent=prev; }
+  });
+
+  document.getElementById('logoutBtn').addEventListener('click', async () => {
+    await logout();
+    renderPerfil();
   });
 }
 
@@ -527,6 +558,13 @@ function initApp(){
   refreshPlanButtons();
 
   initPerfil();
+  initAuthUI();
+  // Cuando cambia la sesión/plan (login, logout, compra), refresca toda la UI dependiente.
+  setOnAuthChange(() => {
+    refreshPlanButtons(); refreshTierLocks(); syncHiddenToggleWithPlan();
+    updateSecretCounter(); renderPerfil();
+  });
+  initAuth(); // restaura sesión y procesa retorno de pago (async, no bloquea el arranque)
 
   registerServiceWorker();
 }

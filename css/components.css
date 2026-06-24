@@ -47,6 +47,10 @@
 .segmented{display:flex;background:var(--color-surface-2);border-radius:11px;padding:3px;margin-bottom:18px;}
 .segmented button{flex:1;padding:9px 0;border:none;background:none;border-radius:9px;font-size:13px;font-weight:600;color:var(--color-text-secondary);cursor:pointer;}
 .segmented button.active{background:var(--color-pill);color:var(--color-text);box-shadow:var(--shadow-pill);}
+/* Selector de moneda dentro de la hoja de pago */
+.seg-pay-row{display:inline-flex;background:var(--color-surface-2);border-radius:9px;padding:2px;}
+.seg-pay{border:none;background:none;border-radius:7px;padding:5px 12px;font-size:12px;font-weight:700;color:var(--color-text-secondary);cursor:pointer;}
+.seg-pay.active{background:var(--color-pill);color:var(--color-text);box-shadow:var(--shadow-pill);}
 
 /* ---- Chips de capacidad ---- */
 .chip-row{display:flex;gap:8px;margin-bottom:6px;}
