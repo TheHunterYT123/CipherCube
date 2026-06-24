@@ -16,7 +16,7 @@
 import {
   FACE_LABELS, FACE_ORDER, TIERS, tryDecryptPayload, parseDecodedPayload, dataUrlForFileEntry,
 } from './crypto.js';
-import { detectTile, warpToCanonical, decodeCanonicalFaces, FACE_COUNT } from './cube3d.js';
+import { detectTile, warpToCanonical, decodeCanonicalFaces, diagnoseCanonicalFaces, FACE_COUNT } from './cube3d.js';
 import { showToast, showError } from './ui.js';
 
 const SAMPLE_SIZE = 480;        // lado del lienzo cuadrado de muestreo
@@ -319,6 +319,39 @@ function renderCubeReveal(rawText, totalCorrected){
   }
 }
 
+/* Panel de diagnóstico cuando el descifrado falla por lectura de color: dice qué
+   caras tienen colores ilegibles, en el panel persistente (no en un toast fugaz). */
+function renderCubeDiagnostic(report){
+  const reveal = document.getElementById('liveDecodeReveal');
+  reveal.innerHTML = '';
+  const title = document.createElement('div');
+  title.style.fontWeight = '600';
+  title.textContent = `No se pudo descifrar: ${report.failedBlocks} de ${report.numBlocks} bloques ilegibles (nivel ${report.tier}).`;
+  reveal.appendChild(title);
+
+  const problem = [];
+  for (let f = 0; f < FACE_COUNT; f++) if (report.perFaceFailed[f] > 0) problem.push(f);
+
+  const body = document.createElement('div');
+  body.style.marginTop = '10px';
+  if (problem.length && problem.length < FACE_COUNT){
+    const sub = document.createElement('div');
+    sub.textContent = 'Caras con colores ilegibles — reescanéalas con más luz y sin reflejos:';
+    body.appendChild(sub);
+    problem.forEach(f => {
+      const row = document.createElement('div'); row.style.marginTop = '4px';
+      const pct = Math.round((report.perFaceFailed[f] / report.perFaceTotal[f]) * 100);
+      row.textContent = `• ${FACE_LABELS[FACE_ORDER[f]]}: ${report.perFaceFailed[f]}/${report.perFaceTotal[f]} bloques dañados (${pct}%)`;
+      body.appendChild(row);
+    });
+  } else {
+    const sub = document.createElement('div');
+    sub.textContent = 'El daño está repartido entre todas las caras: suele ser luz despareja, reflejos sobre las caras, o un desajuste de color de la impresora. Prueba con luz difusa más fuerte y la cámara llenando el recuadro.';
+    body.appendChild(sub);
+  }
+  reveal.appendChild(body);
+}
+
 const cubeScanner = createLiveScanner({
   ids: {
     viewfinder: 'liveViewfinder', canvas: 'liveCanvas', status: 'scanStatus',
@@ -333,7 +366,20 @@ const cubeScanner = createLiveScanner({
   labelIncomplete: n => `Descifrar (faltan ${n})`,
   resetAfterAction: false,
   onAction: async (canonByFace, { pass }) => {
-    const { payload, totalCorrected } = decodeCanonicalFaces(canonByFace, TIERS);
+    let payload, totalCorrected;
+    try{
+      ({ payload, totalCorrected } = decodeCanonicalFaces(canonByFace, TIERS));
+    } catch(e){
+      // Falló la lectura de color: muestra qué caras están mal en el panel y
+      // relanza un error corto para el toast.
+      const report = diagnoseCanonicalFaces(canonByFace, TIERS);
+      if (report){
+        renderCubeDiagnostic(report);
+        document.getElementById('liveDecodeOutput').classList.remove('hidden');
+        throw new Error('No se pudo descifrar. Mira el detalle por cara abajo.');
+      }
+      throw e;
+    }
     const result = await tryDecryptPayload(payload, pass);
     renderCubeReveal(result.text, totalCorrected);
     document.getElementById('liveDecodeOutput').classList.remove('hidden');

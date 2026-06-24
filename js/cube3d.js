@@ -17,6 +17,7 @@ import {
   PALETTE, FACE_ORDER, FACE_LABELS, SHARE_GRID,
   capacityBytesForGrid, colorIndicesToPayload, rsDecodeRawToPayload,
   nearestPaletteIndex, computeHomography, applyHomography,
+  rsDecodeBlock, effectiveCapacityForGrid, RS_N, RS_K, RS_PARITY,
 } from './crypto.js';
 
 /* ---- Geometría normalizada de la baldosa (0..1 en ambos ejes) ---- */
@@ -349,6 +350,48 @@ export function decodeCanonicalFaces(canonByFace, tiers){
     } catch(_){ /* prueba la siguiente capacidad */ }
   }
   throw new Error('No se pudo reconstruir el cubo con ninguna capacidad. Reescanea las caras con buena luz.');
+}
+
+/** A qué cara pertenece (mayormente) un bloque Reed-Solomon. Cada bloque son
+ * RS_N bytes contiguos del flujo de colores; tomo el byte central, lo convierto
+ * a celda (3 bits/celda) y de ahí a cara (grid*grid celdas por cara). */
+function blockFaceIndex(blockIdx, grid){
+  const per = grid * grid;
+  const midByte = blockIdx * RS_N + Math.floor(RS_N / 2);
+  const midCell = Math.floor((midByte * 8) / 3);
+  return Math.max(0, Math.min(FACE_COUNT - 1, Math.floor(midCell / per)));
+}
+
+/** Diagnóstico cuando el descifrado falla: prueba cada capacidad SIN lanzar y
+ * cuenta, por cara, cuántos bloques RS quedan irrecuperables. Devuelve el reporte
+ * de la capacidad con menos bloques dañados (la más probable), o null si ni
+ * siquiera se pudo muestrear. No cambia el pipeline de descifrado. */
+export function diagnoseCanonicalFaces(canonByFace, tiers){
+  let best = null;
+  for (const tierKey of Object.keys(tiers)){
+    const grid = tiers[tierKey].grid;
+    let raw;
+    try{
+      const facesByIndex = {};
+      for (let f = 0; f < FACE_COUNT; f++) facesByIndex[f] = sampleFaceCells(canonByFace[f], grid);
+      const indices = assembleFaces(facesByIndex, grid);
+      raw = colorIndicesToPayload(indices, capacityBytesForGrid(grid));
+    } catch(_){ continue; }
+    const { numBlocks } = effectiveCapacityForGrid(grid);
+    const perFaceFailed = new Array(FACE_COUNT).fill(0);
+    const perFaceTotal = new Array(FACE_COUNT).fill(0);
+    let failedBlocks = 0;
+    for (let i = 0; i < numBlocks; i++){
+      const block = raw.slice(i * RS_N, (i + 1) * RS_N);
+      const res = rsDecodeBlock(block, RS_K, RS_PARITY);
+      const face = blockFaceIndex(i, grid);
+      perFaceTotal[face]++;
+      if (!res.success){ failedBlocks++; perFaceFailed[face]++; }
+    }
+    const report = { tier: tierKey, grid, numBlocks, failedBlocks, perFaceFailed, perFaceTotal };
+    if (!best || report.failedBlocks < best.failedBlocks) best = report;
+  }
+  return best;
 }
 
 /** ¿Las dimensiones de la imagen corresponden a una hoja 3D exportada? Devuelve la capacidad o null. */
