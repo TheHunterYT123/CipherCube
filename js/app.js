@@ -19,6 +19,8 @@ import {
 import {
   initAuth, initAuthUI, setOnAuthChange, logout, changePassword, beginPurchase,
 } from './auth.js';
+import { initAdmin, openAdmin, isAdminEmail } from './admin.js';
+import { getCurrentUser } from './auth.js';
 import { initCamera, resetCameraScreen, stopShareScanner } from './camera.js';
 import { initLiveScanner, startLiveScanner, stopLiveScanner } from './camera-live.js';
 import { renderAllFaceTilesV2 } from './cube3d.js';
@@ -469,6 +471,12 @@ function renderPerfil(){
   document.getElementById('profileOrderCount').textContent = appState.myOrders.length;
   const themeToggle = document.getElementById('themeToggle');
   if (themeToggle) themeToggle.checked = appState.theme === 'dark';
+  // Botón del panel de administración: solo para correos admin.
+  const adminBtn = document.getElementById('openAdminBtn');
+  if (adminBtn){
+    const user = getCurrentUser();
+    adminBtn.style.display = (user && isAdminEmail(user.email)) ? 'block' : 'none';
+  }
   const cubesList = document.getElementById('myCubesList');
   cubesList.innerHTML = appState.myCubes.length ? '' : '<div class="hint">Aún no has creado ningún cubo.</div>';
   appState.myCubes.slice().reverse().forEach(c => {
@@ -486,6 +494,7 @@ function renderPerfil(){
 }
 function initPerfil(){
   document.getElementById('goToTiendaBtn').addEventListener('click', () => showScreen('tienda'));
+  document.getElementById('openAdminBtn').addEventListener('click', () => openAdmin());
   document.getElementById('themeToggle').addEventListener('change', e => setTheme(e.target.checked ? 'dark' : 'light'));
 
   document.getElementById('changePassTrigger').addEventListener('click', () => {
@@ -558,6 +567,7 @@ function initApp(){
   refreshPlanButtons();
 
   initPerfil();
+  initAdmin();
   initAuthUI();
   // Cuando cambia la sesión/plan (login, logout, compra), refresca toda la UI dependiente.
   setOnAuthChange(() => {

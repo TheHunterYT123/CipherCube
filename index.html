@@ -27,6 +27,7 @@
 <link rel="stylesheet" href="css/theme.css">
 <link rel="stylesheet" href="css/components.css">
 <link rel="stylesheet" href="css/animations.css">
+<link rel="stylesheet" href="css/admin.css">
 </head>
 <body>
 
@@ -369,6 +370,7 @@
         <div id="myOrdersList"><div class="hint">Aún no has pedido ningún kit.</div></div>
 
         <button class="btn btn-secondary" id="goToTiendaBtn" style="margin-top:22px;">Administrar plan en Tienda</button>
+        <button class="btn btn-primary" id="openAdminBtn" style="margin-top:10px;display:none;">🛡️ Panel de administración</button>
         <button class="btn btn-secondary" id="changePassTrigger" style="margin-top:10px;">Cambiar contraseña</button>
         <div class="collapse-body" id="changePassBody" style="margin-top:10px;">
           <div class="field"><input type="password" id="currentPass" placeholder="Contraseña actual" autocomplete="current-password"></div>
@@ -429,6 +431,29 @@
     </div>
   </div>
 </div>
+
+  <!-- ============ PANEL DE ADMINISTRACIÓN ============ -->
+  <div class="admin-panel hidden" id="adminPanel">
+    <div class="admin-topbar">
+      <div class="at-title"><span class="at-dot"></span> Panel de administración</div>
+      <span class="admin-mock-badge">Datos de ejemplo</span>
+      <div class="at-spacer"></div>
+      <button class="admin-icon-btn" id="adminRefreshBtn" title="Actualizar">↻</button>
+      <button class="admin-icon-btn" id="adminCloseBtn" title="Cerrar">✕</button>
+    </div>
+    <div class="admin-tabs" id="adminTabs"></div>
+    <div class="admin-content" id="adminContent">
+      <div class="admin-content-inner" id="adminContentInner"></div>
+    </div>
+  </div>
+  <div class="admin-drawer-backdrop" id="adminDrawerBackdrop"></div>
+  <div class="admin-drawer" id="adminDrawer">
+    <div class="admin-drawer-head">
+      <div class="adh-title" id="adminDrawerTitle">Detalle</div>
+      <button class="admin-icon-btn" id="adminDrawerClose" title="Cerrar">✕</button>
+    </div>
+    <div class="admin-drawer-body" id="adminDrawerBody"></div>
+  </div>
 
 <!-- Configura aquí la URL de tu backend en producción, p. ej.:
      <script>window.CIPHERCUBE_API_BASE = 'https://api.tudominio.com';</script>

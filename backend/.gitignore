@@ -4,3 +4,7 @@ node_modules/
 *.log
 npm-debug.log*
 .DS_Store
+# Base de datos local de desarrollo (SQLite)
+*.db
+*.db-shm
+*.db-wal
