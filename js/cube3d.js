@@ -263,35 +263,72 @@ function avgCanonRegion(data, size, cx, cy, halfN){
   return n ? [r / n, g / n, b / n] : [0, 0, 0];
 }
 
-/** Blanco de referencia tomado de la banda blanca de la baldosa (puntos garantizados
- * sin finders ni bits de identidad). Sirve para corregir el balance de color de la cámara. */
-function canonWhiteRef(data, size){
-  const pts = [[F + B / 2, 0.5], [1 - F - B / 2, 0.5], [0.5, 1 - F - B / 2]];
-  let r = 0, g = 0, b = 0;
-  pts.forEach(([nx, ny]) => { const p = avgCanonRegion(data, size, nx, ny, 0.012); r += p[0]; g += p[1]; b += p[2]; });
-  return [r / pts.length, g / pts.length, b / pts.length];
+/** Mediana por canal de una lista de muestras RGB. Rechaza puntos atípicos
+ * (p. ej. una banda blanca manchada de tinta o un finder mal recortado) sin
+ * dejar que arrastren el promedio, cosa que sí hacía la media aritmética. */
+function medianRgb(samples){
+  const ch = c => { const v = samples.map(s => s[c]).sort((a, b) => a - b); const m = v.length >> 1; return v.length % 2 ? v[m] : (v[m - 1] + v[m]) / 2; };
+  return [ch(0), ch(1), ch(2)];
 }
 
+/** Blanco de referencia: muestrea las bandas IZQUIERDA y DERECHA (que nunca
+ * llevan finders ni bits de identidad y son las menos propensas a recortes) en
+ * varias alturas, más el punto inferior. Toma la mediana para que un punto
+ * contaminado (banda inferior repasada con tinta) no tuerza la referencia. */
+function canonWhiteRef(data, size){
+  const lx = F + B / 2, rx = 1 - F - B / 2;
+  const pts = [
+    [lx, 0.35], [lx, 0.5], [lx, 0.65],
+    [rx, 0.35], [rx, 0.5], [rx, 0.65],
+    [0.5, 1 - F - B / 2],
+  ];
+  return medianRgb(pts.map(([nx, ny]) => avgCanonRegion(data, size, nx, ny, 0.012)));
+}
+
+/** Negro de referencia tomado del marco y los finders (zonas garantizadas
+ * oscuras). Se evita el borde inferior por si fue recortado/repasado. Mediana
+ * por robustez. */
+function canonBlackRef(data, size){
+  const pts = [
+    [0.5, F / 2], [F / 2, 0.5], [1 - F / 2, 0.5],   // marco: arriba, izquierda, derecha
+    [F + B / 2, F + B / 2], [1 - F - B / 2, F + B / 2], // finders TL y TR
+  ];
+  return medianRgb(pts.map(([nx, ny]) => avgCanonRegion(data, size, nx, ny, 0.012)));
+}
+
+// Valor de negro de la paleta de marcas (#0A0A0A). La calibración mapea el negro
+// captado a este valor para que en hojas pixel-perfect la corrección sea identidad.
+const BLACK_TARGET = 10;
+
 /** Muestrea las grid*grid celdas de datos de una baldosa ya enderezada.
- * Promedia la zona central de cada celda y corrige el balance de blancos con la
- * banda blanca de la baldosa: en hojas exportadas pixel-perfect el blanco ya es
- * 255, así que la corrección es la identidad (no cambia ese camino); con la cámara
- * neutraliza el tinte y la exposición, que es lo que rompía el descifrado. */
+ * Promedia la zona central de cada celda y aplica una calibración afín por canal
+ * de 2 puntos (negro del marco → 10, blanco de la banda → 255). Esto neutraliza
+ * tinte de luz, exposición y el negro elevado de la cámara mucho mejor que solo
+ * ganancia de blanco; en hojas exportadas pixel-perfect (negro≈10, blanco≈255) la
+ * transformación es la identidad, así que ese camino no cambia. */
 export function sampleFaceCells(canon, grid){
   const { data, size } = canon;
   const dataSpan = 1 - 2 * DI;
   const cellN = dataSpan / grid;
   const half = cellN * 0.3;
   const white = canonWhiteRef(data, size);
-  const balance = white[0] > 120 && white[1] > 120 && white[2] > 120;
-  const gain = [255 / Math.max(white[0], 1), 255 / Math.max(white[1], 1), 255 / Math.max(white[2], 1)];
+  const black = canonBlackRef(data, size);
+  // Solo calibrar si las referencias son sanas: blanco claro y separado del negro.
+  const span = [white[0] - black[0], white[1] - black[1], white[2] - black[2]];
+  const calibrate = white[0] > 120 && white[1] > 120 && white[2] > 120 &&
+    span[0] > 40 && span[1] > 40 && span[2] > 40;
   const cells = new Array(grid * grid);
   let idx = 0;
   for (let r = 0; r < grid; r++){
     for (let c = 0; c < grid; c++){
       const nx = DI + (c + 0.5) * cellN, ny = DI + (r + 0.5) * cellN;
       let rgb = avgCanonRegion(data, size, nx, ny, half);
-      if (balance) rgb = [Math.min(255, rgb[0] * gain[0]), Math.min(255, rgb[1] * gain[1]), Math.min(255, rgb[2] * gain[2])];
+      if (calibrate){
+        rgb = rgb.map((v, ch) => {
+          const out = BLACK_TARGET + (v - black[ch]) / span[ch] * (255 - BLACK_TARGET);
+          return Math.max(0, Math.min(255, out));
+        });
+      }
       cells[idx++] = nearestPaletteIndex(rgb);
     }
   }
