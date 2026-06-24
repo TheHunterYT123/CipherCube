@@ -5,7 +5,7 @@
    Descifrar vive en camera.js.
    ========================================================= */
 import {
-  TIERS, MAGIC, SHARE_GRID, SHAMIR_MAGIC, PALETTE,
+  TIERS, MAGIC, SHARE_GRID, SHAMIR_MAGIC, PALETTE, FACE_LABELS, FACE_ORDER,
   effectiveCapacityForGrid, slotPlaintextLenForCapacity, capacityBytesForGrid,
   buildPayload, rsEncodePayloadToRaw, payloadToColorIndices, drawCubeNet,
   composeSecretPayload, splitSecret, shareToPayload,
@@ -253,6 +253,57 @@ function buildFaceSheetCanvas(colorIndices, grid){
   return sheet;
 }
 
+/** Abre una hoja A4 lista para imprimir: 6 caras a tamaño físico exacto (50 mm),
+ * con líneas de corte, etiqueta de cada cara e instrucciones de armado. El usuario
+ * solo imprime al 100% y pega; no tiene que pelear con medidas. */
+function openPrintSheet(colorIndices, grid, opts){
+  opts = opts || {};
+  const faceMm = 50;
+  const tiles = renderAllFaceTilesV2(colorIndices, grid);
+  const cells = tiles.map((t, i) => {
+    const label = `Cara ${i + 1} · ${FACE_LABELS[FACE_ORDER[i]]}`;
+    return `<div class="cell"><div class="cut"><img src="${t.toDataURL('image/png')}" alt="${label}"></div><div class="cap">${label}</div></div>`;
+  }).join('');
+  const html = `<!doctype html><html lang="es"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${opts.title || 'CipherCube'} — Imprimir y armar</title>
+<style>
+  :root{ color-scheme: light; }
+  *{ box-sizing:border-box; }
+  body{ font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif; color:#111; margin:0; padding:14mm; background:#fff; }
+  h1{ font-size:15pt; margin:0 0 6pt; }
+  ol{ font-size:9.5pt; line-height:1.55; margin:0 0 12pt; padding-left:16pt; }
+  ol b{ color:#000; }
+  .toolbar{ margin-bottom:12pt; }
+  .toolbar button{ font:600 11pt/1 inherit; padding:9pt 16pt; border:0; border-radius:8pt; background:#111; color:#fff; cursor:pointer; }
+  .grid{ display:grid; grid-template-columns:repeat(2, ${faceMm}mm); gap:9mm 12mm; justify-content:center; margin-top:4mm; }
+  .cell{ display:flex; flex-direction:column; align-items:center; }
+  .cut{ width:${faceMm}mm; height:${faceMm}mm; outline:0.3mm dashed #999; outline-offset:1.2mm; }
+  .cut img{ width:100%; height:100%; display:block; image-rendering:pixelated; }
+  .cap{ font-size:8pt; color:#333; margin-top:3.5mm; font-weight:600; }
+  .note{ font-size:8.5pt; color:#666; margin-top:12pt; }
+  @page{ size:A4 portrait; margin:10mm; }
+  @media print{ .screen-only{ display:none !important; } body{ padding:0; } }
+</style></head>
+<body>
+  <div class="toolbar screen-only"><button onclick="window.print()">🖨️ Imprimir / Guardar PDF</button></div>
+  <h1>CipherCube — ${opts.heading || 'Cubo para imprimir y armar'}</h1>
+  <ol>
+    <li><b>Imprime a tamaño real (100%).</b> En el diálogo de impresión elige escala <b>100%</b> y desactiva “Ajustar a la página”. Cada cara debe medir <b>${faceMm}×${faceMm} mm</b> (mídela con regla para confirmar).</li>
+    <li>Usa <b>papel mate</b> si puedes: el brillo crea reflejos que dificultan el escaneo.</li>
+    <li><b>Recorta</b> cada cara por su línea punteada.</li>
+    <li><b>Pega</b> cada cara en una cara distinta de un cubo de <b>${faceMm} mm</b> (5 cm). Sirve un cubo de cartón/madera o un Rubik estándar (~5,7 cm). No importa el orden: cada cara se identifica sola al escanear.</li>
+    <li><b>Escanea</b> con la cámara: acerca cada cara dentro del recuadro y se captura sola. Repite las 6.</li>
+  </ol>
+  <div class="grid">${cells}</div>
+  <p class="note">Consejo: con buena luz y la cámara enfocada, el escaneo es casi instantáneo. Si una cara cuesta, manténla firme un segundo dentro de la guía.</p>
+</body></html>`;
+  const w = window.open('', '_blank');
+  if (!w){ showError('Permite las ventanas emergentes para abrir la hoja de impresión.'); return; }
+  w.document.open(); w.document.write(html); w.document.close();
+  showToast('Hoja lista. Imprime al 100% (tamaño real).');
+}
+
 function initResultView(){
   const downloadMenu = document.getElementById('downloadMenu');
   document.getElementById('downloadMenuBtn').addEventListener('click', (e) => {
@@ -273,6 +324,14 @@ function initResultView(){
     downloadMenu.classList.add('hidden');
   });
   document.getElementById('download3dBtn').addEventListener('click', () => {
+    if (!lastGenerated) return;
+    openPrintSheet(lastGenerated.indices, lastGenerated.grid, {
+      title: `CipherCube ${TIERS[lastGenerated.tier] ? TIERS[lastGenerated.tier].label : ''}`.trim(),
+      heading: 'Cubo para imprimir y armar',
+    });
+    downloadMenu.classList.add('hidden');
+  });
+  document.getElementById('download3dPngBtn').addEventListener('click', () => {
     if (!lastGenerated) return;
     const sheet = buildFaceSheetCanvas(lastGenerated.indices, lastGenerated.grid);
     const link = document.createElement('a');
@@ -338,16 +397,15 @@ function initShamirSplit(){
         const canvas = document.createElement('canvas');
         const lbl = document.createElement('div'); lbl.className='lbl'; lbl.textContent=`Parte ${share.index}/${n}`;
         const dlBtn = document.createElement('button'); dlBtn.textContent='Descargar';
-        const dl3dBtn = document.createElement('button'); dl3dBtn.textContent='Descargar caras 3D';
+        const dl3dBtn = document.createElement('button'); dl3dBtn.textContent='Imprimir y armar';
         item.appendChild(canvas); item.appendChild(lbl); item.appendChild(dlBtn); item.appendChild(dl3dBtn); list.appendChild(item);
         drawCubeNet(canvas, indices, SHARE_GRID);
         dlBtn.addEventListener('click', () => { const link=document.createElement('a'); link.download=`ciphercube-parte-${share.index}-de-${n}.png`; link.href=canvas.toDataURL('image/png'); link.click(); });
         dl3dBtn.addEventListener('click', () => {
-          const sheet = buildFaceSheetCanvas(indices, SHARE_GRID);
-          const link = document.createElement('a');
-          link.download = `ciphercube-parte-${share.index}-de-${n}-caras3d.png`;
-          link.href = sheet.toDataURL('image/png');
-          link.click();
+          openPrintSheet(indices, SHARE_GRID, {
+            title: `CipherCube parte ${share.index}/${n}`,
+            heading: `Parte ${share.index} de ${n} — imprimir y armar`,
+          });
         });
       });
     } catch(e){ showError(e.message); }

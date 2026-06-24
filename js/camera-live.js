@@ -85,6 +85,37 @@ export function createLiveScanner(config){
     void els.flash.offsetWidth; // reinicia la animación
     els.flash.classList.add('show');
   }
+  /* Animación "tipo foto": congela lo que hay dentro de la guía, lo encoge y lo
+     manda a una esquina del visor antes de desvanecerse. */
+  function playCaptureAnimation(){
+    const vf = els.viewfinder;
+    if (!vf) return;
+    const rect = vf.getBoundingClientRect();
+    if (!rect.width) return;
+    const inset = GUIDE_INSET;
+    const gx = rect.width * inset, gy = rect.height * inset;
+    const gw = rect.width * (1 - 2 * inset), gh = rect.height * (1 - 2 * inset);
+    // Instantánea de la región dentro de la guía (del lienzo de muestreo, ya recortado).
+    const m = Math.round(SAMPLE_SIZE * inset);
+    const snap = document.createElement('canvas');
+    snap.width = SAMPLE_SIZE - 2 * m; snap.height = SAMPLE_SIZE - 2 * m;
+    snap.getContext('2d').drawImage(cleanCanvas, m, m, snap.width, snap.height, 0, 0, snap.width, snap.height);
+    const fx = document.createElement('div');
+    fx.className = 'capture-fx';
+    fx.style.left = gx + 'px'; fx.style.top = gy + 'px';
+    fx.style.width = gw + 'px'; fx.style.height = gh + 'px';
+    fx.appendChild(snap);
+    vf.appendChild(fx);
+    // Destino: esquina superior derecha del visor, encogido.
+    const scale = 0.16;
+    const tx = (rect.width - 6 - (gw * scale) / 2) - (gx + gw / 2);
+    const ty = (6 + (gh * scale) / 2) - (gy + gh / 2);
+    requestAnimationFrame(() => {
+      fx.style.transform = `translate(${tx}px, ${ty}px) scale(${scale})`;
+      fx.classList.add('fly');
+    });
+    setTimeout(() => fx.remove(), 720);
+  }
   function showRotateHint(){
     els.rotate.classList.add('show');
     setStatus('Capturada. Gira el cubo y muestra otra cara.');
@@ -98,6 +129,7 @@ export function createLiveScanner(config){
     captured[detection.faceIndex] = canon;
     stableFace = -1; stableCount = 0;
     flash();
+    playCaptureAnimation();
     renderProgress();
     if (Object.keys(captured).length === FACE_COUNT){
       setStatus('¡Listo! 6 caras capturadas.');
@@ -147,7 +179,11 @@ export function createLiveScanner(config){
     }
     setStatus('Iniciando cámara…');
     try{
-      stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false });
+      // Pide buena resolución para que las celdas tengan suficientes píxeles al acercar.
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } },
+        audio: false,
+      });
     } catch(e){
       els.viewfinder.classList.add('scan-error');
       setStatus('No se pudo abrir la cámara (permiso denegado o sin cámara). Usa la opción de subir imagen.');
@@ -165,6 +201,15 @@ export function createLiveScanner(config){
     video.srcObject = stream;
     els.viewfinder.insertBefore(video, els.canvas);
     await video.play().catch(() => {});
+    // Autoenfoque continuo donde el dispositivo lo permita: al acercar la cámara a
+    // la cara del cubo, evita el desenfoque que hacía casi imposible la detección.
+    try{
+      const track = stream.getVideoTracks()[0];
+      const caps = track.getCapabilities ? track.getCapabilities() : {};
+      const adv = [];
+      if (caps.focusMode && caps.focusMode.includes('continuous')) adv.push({ focusMode: 'continuous' });
+      if (adv.length) await track.applyConstraints({ advanced: adv });
+    } catch(_){ /* el dispositivo no expone control de enfoque; se usa el automático */ }
     running = true; paused = false;
     setStatus('Centra una cara del cubo en el recuadro.');
     rafId = requestAnimationFrame(loop);

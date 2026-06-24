@@ -138,13 +138,26 @@ export function renderAllFaceTilesV2(colorIndices, grid){
 function makeSampler(ctxData, w, h, corners){
   const canonical = [[0, 0], [1, 0], [1, 1], [0, 1]];
   const H = computeHomography(canonical, corners);
-  return (nx, ny) => {
+  const one = (nx, ny) => {
     let [px, py] = applyHomography(H, nx, ny);
     px = Math.max(0, Math.min(w - 1, Math.round(px)));
     py = Math.max(0, Math.min(h - 1, Math.round(py)));
     const i = (py * w + px) * 4;
     return [ctxData[i], ctxData[i + 1], ctxData[i + 2]];
   };
+  // Muestreo promediado sobre una pequeña vecindad normalizada (3×3). Es clave
+  // para la cámara: un solo píxel es muy sensible al desenfoque y al ruido, así
+  // que promediar estabiliza tanto la detección de marcas como la lectura.
+  one.avg = (nx, ny, halfN) => {
+    if (!halfN) return one(nx, ny);
+    let r = 0, g = 0, b = 0, n = 0;
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++){
+      const p = one(nx + dx * halfN, ny + dy * halfN);
+      r += p[0]; g += p[1]; b += p[2]; n++;
+    }
+    return [r / n, g / n, b / n];
+  };
+  return one;
 }
 function rotPoint(nx, ny, k){
   // Rota (nx,ny) en pasos de 90° alrededor del centro (0.5,0.5). k horario.
@@ -162,23 +175,24 @@ function isDark(rgb){ return luma(rgb) < 110; }
  */
 export function readFaceTile(data, w, h, corners, grid){
   const sample = makeSampler(data, w, h, corners);
+  const MARK = 0.012; // radio normalizado para promediar marcas (finders/marco/id)
   // Prueba las 4 rotaciones; la correcta reproduce el patrón canónico de finders.
   for (let k = 0; k < 4; k++){
     const pattern = FINDER_CENTERS.map(([cx, cy]) => {
       const [rx, ry] = rotPoint(cx, cy, k);
-      return isDark(sample(rx, ry));
+      return isDark(sample.avg(rx, ry, MARK));
     });
     const matches = pattern.every((d, i) => d === CANONICAL_DARK[i]);
     if (!matches) continue;
     // Verifica marco oscuro en los puntos medios de los lados.
     const frameDark = [[0.5, F / 2], [0.5, 1 - F / 2], [F / 2, 0.5], [1 - F / 2, 0.5]]
-      .every(([fx, fy]) => { const [rx, ry] = rotPoint(fx, fy, k); return isDark(sample(rx, ry)); });
+      .every(([fx, fy]) => { const [rx, ry] = rotPoint(fx, fy, k); return isDark(sample.avg(rx, ry, MARK)); });
     if (!frameDark) continue;
     // Lee identidad de cara (3 bits) en orientación canónica.
     let faceIndex = 0;
     for (let b = 0; b < 3; b++){
       const [rx, ry] = rotPoint(ID_BIT_X[b], ID_BIT_Y, k);
-      faceIndex = (faceIndex << 1) | (isDark(sample(rx, ry)) ? 1 : 0);
+      faceIndex = (faceIndex << 1) | (isDark(sample.avg(rx, ry, MARK)) ? 1 : 0);
     }
     if (faceIndex < 0 || faceIndex >= FACE_COUNT) continue;
     // Lee la rejilla de datos en orientación canónica.
@@ -205,14 +219,15 @@ export function readFaceTile(data, w, h, corners, grid){
  * para correr cada frame de la cámara. Devuelve {ok, faceIndex, rotation}. */
 export function detectTile(data, w, h, corners){
   const sample = makeSampler(data, w, h, corners);
+  const MARK = 0.012; // radio normalizado para promediar marcas (estabiliza con cámara)
   for (let k = 0; k < 4; k++){
-    const pattern = FINDER_CENTERS.map(([cx, cy]) => { const [rx, ry] = rotPoint(cx, cy, k); return isDark(sample(rx, ry)); });
+    const pattern = FINDER_CENTERS.map(([cx, cy]) => { const [rx, ry] = rotPoint(cx, cy, k); return isDark(sample.avg(rx, ry, MARK)); });
     if (!pattern.every((d, i) => d === CANONICAL_DARK[i])) continue;
     const frameDark = [[0.5, F / 2], [0.5, 1 - F / 2], [F / 2, 0.5], [1 - F / 2, 0.5]]
-      .every(([fx, fy]) => { const [rx, ry] = rotPoint(fx, fy, k); return isDark(sample(rx, ry)); });
+      .every(([fx, fy]) => { const [rx, ry] = rotPoint(fx, fy, k); return isDark(sample.avg(rx, ry, MARK)); });
     if (!frameDark) continue;
     let faceIndex = 0;
-    for (let b = 0; b < 3; b++){ const [rx, ry] = rotPoint(ID_BIT_X[b], ID_BIT_Y, k); faceIndex = (faceIndex << 1) | (isDark(sample(rx, ry)) ? 1 : 0); }
+    for (let b = 0; b < 3; b++){ const [rx, ry] = rotPoint(ID_BIT_X[b], ID_BIT_Y, k); faceIndex = (faceIndex << 1) | (isDark(sample.avg(rx, ry, MARK)) ? 1 : 0); }
     if (faceIndex < 0 || faceIndex >= FACE_COUNT) continue;
     return { ok: true, faceIndex, rotation: k };
   }
@@ -221,7 +236,7 @@ export function detectTile(data, w, h, corners){
 
 /** Endereza la baldosa a un cuadrado canónico (sin rotación) para muestrear
  * después a cualquier capacidad. Devuelve { data, size }. */
-export function warpToCanonical(data, w, h, corners, rotation, outSize = 440){
+export function warpToCanonical(data, w, h, corners, rotation, outSize = 600){
   const sample = makeSampler(data, w, h, corners);
   const out = new Uint8ClampedArray(outSize * outSize * 4);
   for (let oy = 0; oy < outSize; oy++){
@@ -235,20 +250,49 @@ export function warpToCanonical(data, w, h, corners, rotation, outSize = 440){
   return { data: out, size: outSize };
 }
 
-/** Muestrea las grid*grid celdas de datos de una baldosa ya enderezada. */
+/** Promedia el RGB sobre una caja centrada (en coordenadas normalizadas) del lienzo canónico. */
+function avgCanonRegion(data, size, cx, cy, halfN){
+  const x0 = Math.max(0, Math.floor((cx - halfN) * size));
+  const x1 = Math.min(size - 1, Math.ceil((cx + halfN) * size));
+  const y0 = Math.max(0, Math.floor((cy - halfN) * size));
+  const y1 = Math.min(size - 1, Math.ceil((cy + halfN) * size));
+  let r = 0, g = 0, b = 0, n = 0;
+  for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++){
+    const i = (y * size + x) * 4; r += data[i]; g += data[i + 1]; b += data[i + 2]; n++;
+  }
+  return n ? [r / n, g / n, b / n] : [0, 0, 0];
+}
+
+/** Blanco de referencia tomado de la banda blanca de la baldosa (puntos garantizados
+ * sin finders ni bits de identidad). Sirve para corregir el balance de color de la cámara. */
+function canonWhiteRef(data, size){
+  const pts = [[F + B / 2, 0.5], [1 - F - B / 2, 0.5], [0.5, 1 - F - B / 2]];
+  let r = 0, g = 0, b = 0;
+  pts.forEach(([nx, ny]) => { const p = avgCanonRegion(data, size, nx, ny, 0.012); r += p[0]; g += p[1]; b += p[2]; });
+  return [r / pts.length, g / pts.length, b / pts.length];
+}
+
+/** Muestrea las grid*grid celdas de datos de una baldosa ya enderezada.
+ * Promedia la zona central de cada celda y corrige el balance de blancos con la
+ * banda blanca de la baldosa: en hojas exportadas pixel-perfect el blanco ya es
+ * 255, así que la corrección es la identidad (no cambia ese camino); con la cámara
+ * neutraliza el tinte y la exposición, que es lo que rompía el descifrado. */
 export function sampleFaceCells(canon, grid){
   const { data, size } = canon;
   const dataSpan = 1 - 2 * DI;
   const cellN = dataSpan / grid;
+  const half = cellN * 0.3;
+  const white = canonWhiteRef(data, size);
+  const balance = white[0] > 120 && white[1] > 120 && white[2] > 120;
+  const gain = [255 / Math.max(white[0], 1), 255 / Math.max(white[1], 1), 255 / Math.max(white[2], 1)];
   const cells = new Array(grid * grid);
   let idx = 0;
   for (let r = 0; r < grid; r++){
     for (let c = 0; c < grid; c++){
       const nx = DI + (c + 0.5) * cellN, ny = DI + (r + 0.5) * cellN;
-      const px = Math.min(size - 1, Math.round(nx * size));
-      const py = Math.min(size - 1, Math.round(ny * size));
-      const i = (py * size + px) * 4;
-      cells[idx++] = nearestPaletteIndex([data[i], data[i + 1], data[i + 2]]);
+      let rgb = avgCanonRegion(data, size, nx, ny, half);
+      if (balance) rgb = [Math.min(255, rgb[0] * gain[0]), Math.min(255, rgb[1] * gain[1]), Math.min(255, rgb[2] * gain[2])];
+      cells[idx++] = nearestPaletteIndex(rgb);
     }
   }
   return cells;

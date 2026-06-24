@@ -122,12 +122,19 @@
 .scan-frame .c3{bottom:0;left:0;border-right:none;border-top:none;border-radius:0 0 0 6px;}
 .scan-frame .c4{bottom:0;right:0;border-left:none;border-top:none;border-radius:0 0 6px 0;}
 .scan-done .scan-frame .corner{border-color:#33d17a;}
-.scan-status{position:absolute;left:10px;right:10px;bottom:10px;z-index:4;text-align:center;
-  font-size:11.5px;font-weight:600;color:#fff;background:rgba(10,10,10,.62);backdrop-filter:blur(4px);
-  border-radius:10px;padding:7px 10px;line-height:1.3;}
-.scan-error .scan-status{background:rgba(150,40,0,.7);}
+/* Mensaje de estado: fuera del visor (debajo), para no tapar las esquinas. */
+.scan-status{margin:10px 0 4px;text-align:center;font-size:12px;font-weight:600;color:var(--color-text);
+  background:var(--color-surface);border:1px solid var(--color-border);border-radius:10px;padding:9px 12px;line-height:1.35;}
+.live-viewfinder.scan-error + .scan-status{background:rgba(150,40,0,.12);border-color:rgba(150,40,0,.55);color:#b03000;}
 .scan-flash{position:absolute;inset:0;z-index:5;background:#fff;opacity:0;pointer-events:none;}
 .scan-flash.show{animation:scanFlash .35s ease-out;}
+/* Animación tipo foto al capturar una cara. */
+.capture-fx{position:absolute;z-index:7;border-radius:12px;overflow:hidden;pointer-events:none;
+  box-shadow:0 8px 30px rgba(0,0,0,.45);border:2px solid rgba(255,255,255,.95);
+  transform:translate(0,0) scale(1);opacity:1;
+  transition:transform .6s cubic-bezier(.22,.9,.32,1), opacity .6s ease;}
+.capture-fx canvas{display:block;width:100%;height:100%;}
+.capture-fx.fly{opacity:0;}
 .scan-rotate{position:absolute;inset:0;z-index:6;display:none;flex-direction:column;align-items:center;justify-content:center;gap:8px;
   background:rgba(10,10,10,.45);backdrop-filter:blur(2px);color:#fff;}
 .scan-rotate.show{display:flex;}

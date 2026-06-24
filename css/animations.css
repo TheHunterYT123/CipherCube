@@ -49,5 +49,6 @@
 @media (prefers-reduced-motion: reduce){
   .stagger-in,.toast,.info-sheet,.result-view:not(.hidden){animation:none !important;opacity:1 !important;transform:none !important;}
   .scan-rotate svg{animation:none !important;}
+  .capture-fx{transition:none !important;}
   *,*::before,*::after{transition:none !important;}
 }
