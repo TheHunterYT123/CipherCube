@@ -19,6 +19,7 @@ import {
   nearestPaletteIndex, computeHomography, applyHomography,
   rsDecodeBlock, effectiveCapacityForGrid, RS_N, RS_K, RS_PARITY, RS_PARITY_HIGH,
 } from './crypto.js';
+import { classifyCellsAdaptive } from './colorcluster.js';
 
 /** Variantes de paridad a probar para un grid dado al descifrar (no se sabe de
  * antemano si el cubo se generó con "alta corrección"): el nivel Pro admite la
@@ -416,7 +417,7 @@ const BLACK_TARGET = 10;
  * tinte de luz, exposición y el negro elevado de la cámara mucho mejor que solo
  * ganancia de blanco; en hojas exportadas pixel-perfect (negro≈10, blanco≈255) la
  * transformación es la identidad, así que ese camino no cambia. */
-export function sampleFaceCells(canon, grid){
+export function sampleFaceCellsRGB(canon, grid){
   const { data, size } = canon;
   const dataSpan = 1 - 2 * DI;
   const cellN = dataSpan / grid;
@@ -439,30 +440,61 @@ export function sampleFaceCells(canon, grid){
           return Math.max(0, Math.min(255, out));
         });
       }
-      cells[idx++] = nearestPaletteIndex(rgb);
+      cells[idx++] = rgb;
     }
   }
   return cells;
 }
+/** Lectura "congelada" por celda: el RGB calibrado clasificado contra la paleta
+ * teórica fija. Rápida y exacta para hojas pixel-perfect; es el primer intento. */
+export function sampleFaceCells(canon, grid){
+  return sampleFaceCellsRGB(canon, grid).map(nearestPaletteIndex);
+}
+
+/** Clasifica las 6 caras por color ADAPTATIVO (clustering global): muestrea el
+ * RGB calibrado de cada celda de todas las caras y deja que colorcluster mapee
+ * los colores como los ve la cámara. Devuelve {faceIndex: cells}. */
+function clusterClassifyFaces(canonByFace, grid){
+  const facesRgb = [];
+  for (let f = 0; f < FACE_COUNT; f++) facesRgb.push(sampleFaceCellsRGB(canonByFace[f], grid));
+  const labels = classifyCellsAdaptive(facesRgb);
+  const facesByIndex = {};
+  for (let f = 0; f < FACE_COUNT; f++) facesByIndex[f] = labels[f];
+  return facesByIndex;
+}
 
 /** Dadas las 6 caras enderezadas (objeto {faceIndex: canon}), prueba cada
- * capacidad de `tiers` hasta que Reed-Solomon valide. Reutiliza el pipeline
- * congelado. Devuelve { payload, totalCorrected, grid, tier }. */
+ * capacidad de `tiers` hasta que Reed-Solomon valide. Devuelve
+ * { payload, totalCorrected, grid, tier }.
+ *
+ * Dos pasadas: primero el lector "congelado" (paleta fija) — rápido y exacto
+ * para hojas pixel-perfect. Si NINGUNA capacidad valida con él, se reintenta con
+ * la clasificación ADAPTATIVA por clustering, que tolera la curva de tono no
+ * lineal de cámaras/pantallas (gamma, tinte, saturación) que descoloca un color
+ * entero de la paleta. El resultado siempre lo valida Reed-Solomon, así que el
+ * clustering nunca produce un falso positivo: si su lectura no cuadra, no valida
+ * y se descarta. */
 export function decodeCanonicalFaces(canonByFace, tiers){
-  for (const tierKey of Object.keys(tiers)){
-    const grid = tiers[tierKey].grid;
-    let facesByIndex;
-    try{
-      facesByIndex = {};
-      for (let f = 0; f < FACE_COUNT; f++) facesByIndex[f] = sampleFaceCells(canonByFace[f], grid);
-    } catch(_){ continue; }
-    // El muestreo de píxeles no depende de la paridad usada al crear el cubo, así
-    // que se reutiliza facesByIndex y solo se reintenta el reparto datos/paridad.
-    for (const parity of parityCandidatesForGrid(grid)){
+  for (const adaptive of [false, true]){
+    for (const tierKey of Object.keys(tiers)){
+      const grid = tiers[tierKey].grid;
+      let facesByIndex;
       try{
-        const { payload, totalCorrected } = facesToPayload(facesByIndex, grid, parity);
-        return { payload, totalCorrected, grid, tier: tierKey, parity };
-      } catch(_){ /* prueba la siguiente paridad o capacidad */ }
+        if (adaptive){
+          facesByIndex = clusterClassifyFaces(canonByFace, grid);
+        } else {
+          facesByIndex = {};
+          for (let f = 0; f < FACE_COUNT; f++) facesByIndex[f] = sampleFaceCells(canonByFace[f], grid);
+        }
+      } catch(_){ continue; }
+      // El muestreo no depende de la paridad usada al crear el cubo, así que se
+      // reutiliza facesByIndex y solo se reintenta el reparto datos/paridad.
+      for (const parity of parityCandidatesForGrid(grid)){
+        try{
+          const { payload, totalCorrected } = facesToPayload(facesByIndex, grid, parity);
+          return { payload, totalCorrected, grid, tier: tierKey, parity };
+        } catch(_){ /* prueba la siguiente paridad o capacidad */ }
+      }
     }
   }
   throw new Error('No se pudo reconstruir el cubo con ninguna capacidad. Reescanea las caras con buena luz.');
@@ -484,12 +516,18 @@ function blockFaceIndex(blockIdx, grid){
  * siquiera se pudo muestrear. No cambia el pipeline de descifrado. */
 export function diagnoseCanonicalFaces(canonByFace, tiers){
   let best = null;
+  for (const adaptive of [false, true]){
   for (const tierKey of Object.keys(tiers)){
     const grid = tiers[tierKey].grid;
     let raw;
     try{
-      const facesByIndex = {};
-      for (let f = 0; f < FACE_COUNT; f++) facesByIndex[f] = sampleFaceCells(canonByFace[f], grid);
+      let facesByIndex;
+      if (adaptive){
+        facesByIndex = clusterClassifyFaces(canonByFace, grid);
+      } else {
+        facesByIndex = {};
+        for (let f = 0; f < FACE_COUNT; f++) facesByIndex[f] = sampleFaceCells(canonByFace[f], grid);
+      }
       const indices = assembleFaces(facesByIndex, grid);
       raw = colorIndicesToPayload(indices, capacityBytesForGrid(grid));
     } catch(_){ continue; }
@@ -508,6 +546,7 @@ export function diagnoseCanonicalFaces(canonByFace, tiers){
       const report = { tier: tierKey, grid, parity, numBlocks, failedBlocks, perFaceFailed, perFaceTotal };
       if (!best || report.failedBlocks < best.failedBlocks) best = report;
     }
+  }
   }
   return best;
 }

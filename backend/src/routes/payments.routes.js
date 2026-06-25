@@ -14,6 +14,8 @@ import * as stripe from '../services/payments/stripe.js';
 import * as paypal from '../services/payments/paypal.js';
 import * as mercadopago from '../services/payments/mercadopago.js';
 import { applyGrant } from '../services/payments/grant.js';
+import { recordAttempt } from '../services/attempt.service.js';
+import { logEvent } from '../services/audit.service.js';
 
 const router = Router();
 
@@ -22,6 +24,12 @@ router.post('/checkout', requireAuth, asyncHandler(async (req, res) => {
   const { plan, provider, currency } = parse(checkoutSchema, req.body);
   const user = await findById(req.user.id);
   if (!user) return res.status(404).json({ error: 'Cuenta no encontrada.' });
+
+  // Deja constancia del intento (embudo de conversión del panel).
+  await recordAttempt({ userId: user.id, userEmail: user.email, plan, provider, currency });
+  await logEvent('checkout_started', `Checkout iniciado (${user.email}) · ${plan}/${provider}`, {
+    userId: user.id, userEmail: user.email, ip: req.ip,
+  });
 
   const prices = priceFor(plan);
   const amount = prices ? prices[currency] : null;

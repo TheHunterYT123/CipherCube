@@ -28,6 +28,10 @@ export const config = {
   frontendUrl: req('FRONTEND_URL', 'http://localhost:8643'),
   publicBackendUrl: req('PUBLIC_BACKEND_URL', 'http://localhost:4000'),
 
+  // Correos que se promueven a administrador al registrarse (en minúsculas).
+  // El acceso al panel se valida SIEMPRE contra users.is_admin en la BD.
+  adminEmails: list('ADMIN_EMAILS', 'thehunter9856@gmail.com').map(s => s.toLowerCase()),
+
   db: {
     connectionString: process.env.DATABASE_URL || undefined,
     host: process.env.PGHOST,
@@ -63,7 +67,25 @@ export const config = {
     usd: { plus: process.env.PRICE_PLUS_USD || '4.99', boveda: process.env.PRICE_BOVEDA_USD || '9.99' },
     mxn: { plus: process.env.PRICE_PLUS_MXN || '99', boveda: process.env.PRICE_BOVEDA_MXN || '199' },
   },
+
+  // Correo saliente (verificación de cuenta). Si no hay SMTP, en desarrollo el
+  // enlace se imprime en consola; en producción el envío fallará (queda en log).
+  smtp: {
+    host: process.env.SMTP_HOST || '',
+    port: process.env.SMTP_PORT ? parseInt(process.env.SMTP_PORT, 10) : 587,
+    secure: process.env.SMTP_SECURE === 'true',
+    user: process.env.SMTP_USER || '',
+    pass: process.env.SMTP_PASS || '',
+    from: process.env.SMTP_FROM || 'CipherCube <no-reply@ciphercube.app>',
+  },
+  // Si es true, el login exige correo verificado.
+  requireEmailVerification: process.env.REQUIRE_EMAIL_VERIFICATION === 'true',
 };
+
+/** ¿Hay un servidor SMTP configurado para enviar correos de verdad? */
+export function smtpConfigured(){
+  return !!(config.smtp.host && config.smtp.user && config.smtp.pass);
+}
 
 /** ¿Está configurado un proveedor de pago concreto? Sirve para no exponer
  * métodos de pago a medio configurar en el frontend. */

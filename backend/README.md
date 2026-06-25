@@ -51,10 +51,28 @@ Todas están documentadas en [`.env.example`](.env.example). Las imprescindibles
 
 | Variable | Para qué |
 |---|---|
-| `DATABASE_URL` | Conexión a PostgreSQL |
+| `DATABASE_URL` | Conexión a PostgreSQL. **Si la dejas vacía se usa SQLite** (solo desarrollo). |
 | `JWT_ACCESS_SECRET`, `JWT_REFRESH_SECRET` | Firma de tokens (genera 2 distintos y largos) |
 | `CORS_ORIGINS` | Dominios del frontend permitidos |
 | `FRONTEND_URL`, `PUBLIC_BACKEND_URL` | Redirecciones de pago y webhooks |
+| `ADMIN_EMAILS` | Correos que se promueven a admin del panel al registrarse |
+| `SMTP_*`, `REQUIRE_EMAIL_VERIFICATION` | Envío del correo de verificación (opcional) |
+
+### Base de datos: SQLite (dev) vs PostgreSQL (producción)
+
+El backend tiene **driver dual**: usa PostgreSQL si defines `DATABASE_URL` (o `PGHOST`),
+y SQLite en caso contrario. SQLite vale para desarrollo local, pero **en producción usa
+PostgreSQL** (concurrencia, replicación y backups). `npm run migrate` aplica el esquema
+correcto según el driver activo (`schema.sql` o `schema.pg.sql`).
+
+### Administrador del panel
+
+Marca una cuenta como admin (debe existir):
+
+```bash
+npm run grant-admin correo@dominio.com          # conceder
+npm run grant-admin correo@dominio.com --revoke  # revocar
+```
 
 Genera secretos seguros:
 

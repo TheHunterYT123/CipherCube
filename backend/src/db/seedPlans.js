@@ -4,7 +4,7 @@
    Las "features" deben coincidir con las que el frontend evalúa
    (ver js/plans.js / js/entitlements.js).
    ========================================================= */
-import { pool } from './pool.js';
+import { query, closePool } from './pool.js';
 
 export const PLAN_CATALOG = [
   {
@@ -26,19 +26,21 @@ export const PLAN_CATALOG = [
 
 export async function seedPlans(){
   for (const p of PLAN_CATALOG){
-    await pool.query(
-      `INSERT INTO plans (key, name, description, features, active, sort_order)
-       VALUES ($1,$2,$3,$4,TRUE,$5)
-       ON CONFLICT (key) DO UPDATE SET
-         name=EXCLUDED.name, description=EXCLUDED.description,
-         features=EXCLUDED.features, sort_order=EXCLUDED.sort_order, active=TRUE`,
-      [p.key, p.name, p.description, JSON.stringify(p.features), p.sort_order]
-    );
+    try{
+      await query(
+        `INSERT INTO plans (key, name, description, features, active, sort_order)
+         VALUES (?, ?, ?, ?, 1, ?)
+         ON CONFLICT (key) DO NOTHING`,
+        [p.key, p.name, p.description, JSON.stringify(p.features), p.sort_order]
+      );
+    } catch(e){
+      console.error('[seed] Error:', e.message);
+    }
   }
 }
 
 // Permite ejecutarlo suelto: node src/db/seedPlans.js
 if (import.meta.url === `file://${process.argv[1]}`){
-  seedPlans().then(() => { console.log('[seed] Planes sembrados.'); return pool.end(); })
-    .catch(e => { console.error(e); process.exit(1); });
+  seedPlans().then(async () => { console.log('[seed] Planes sembrados.'); await closePool(); process.exit(0); })
+    .catch(async e => { console.error(e); await closePool(); process.exit(1); });
 }

@@ -3,7 +3,7 @@
    SERVICE WORKER — cache del app shell para uso offline.
    Sube CACHE_NAME al publicar cambios para invalidar cachés viejas.
    ========================================================= */
-const CACHE_NAME = 'ciphercube-v14';
+const CACHE_NAME = 'ciphercube-v15';
 const PRECACHE_URLS = [
   './',
   './index.html',
@@ -21,6 +21,7 @@ const PRECACHE_URLS = [
   './js/camera.js',
   './js/camera-live.js',
   './js/cube3d.js',
+  './js/colorcluster.js',
   './js/crypto.js',
   './js/plans.js',
   './js/storage.js',

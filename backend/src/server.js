@@ -15,6 +15,7 @@ import profileRoutes from './routes/profile.routes.js';
 import plansRoutes from './routes/plans.routes.js';
 import paymentsRoutes from './routes/payments.routes.js';
 import webhookRoutes from './routes/webhooks.routes.js';
+import adminRoutes from './routes/admin.routes.js';
 
 const app = express();
 app.set('trust proxy', 1); // detrás de Nginx/Caddy en el VPS
@@ -44,6 +45,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/profile', profileRoutes);
 app.use('/api/plans', plansRoutes);
 app.use('/api/payments', paymentsRoutes);
+app.use('/api/admin', adminRoutes);
 
 app.use(notFound);
 app.use(errorHandler);
