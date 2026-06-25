@@ -251,6 +251,93 @@ export function warpToCanonical(data, w, h, corners, rotation, outSize = 600){
   return { data: out, size: outSize };
 }
 
+/* ---- Afinado de esquinas reales de la baldosa (clave para la cámara) ----
+   La detección es tolerante (marcas grandes y promediadas), así que valida la
+   cara aunque no llene exacto el recuadro guía; pero entonces la rejilla de datos
+   se muestrea corrida y la lectura sale basura. Aquí localizamos los BORDES
+   reales del marco negro (transición papel-blanco → marco-negro, el rasgo de
+   mayor contraste de la baldosa), ajustamos una recta a cada arista y obtenemos
+   las 4 esquinas por intersección. Maneja escala, desplazamiento y giro residual. */
+
+function lumaAt(data, w, x, y){ const i = ((y | 0) * w + (x | 0)) * 4; return 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]; }
+
+/** Camina desde (x0,y0) en pasos (dx,dy) y devuelve el punto donde empieza la
+ * primera racha oscura de al menos `minRun` (el borde exterior del marco). */
+function scanFrameEdge(data, w, h, x0, y0, dx, dy, steps, thr, minRun){
+  let runStart = -1, run = 0;
+  for (let s = 0; s < steps; s++){
+    const x = x0 + dx * s, y = y0 + dy * s;
+    if (x < 0 || x >= w || y < 0 || y >= h){ runStart = -1; run = 0; continue; }
+    if (lumaAt(data, w, x, y) < thr){ if (runStart < 0) runStart = s; if (++run >= minRun) return [x0 + dx * runStart, y0 + dy * runStart]; }
+    else { runStart = -1; run = 0; }
+  }
+  return null;
+}
+
+/** Mínimos cuadrados. mode 'xy': x=a*y+b (aristas verticales); 'yx': y=a*x+b. */
+function fitLine(points, mode){
+  const u = points.map(p => mode === 'xy' ? p[1] : p[0]);
+  const v = points.map(p => mode === 'xy' ? p[0] : p[1]);
+  const n = u.length; let su = 0, sv = 0, suu = 0, suv = 0;
+  for (let i = 0; i < n; i++){ su += u[i]; sv += v[i]; suu += u[i] * u[i]; suv += u[i] * v[i]; }
+  const den = n * suu - su * su;
+  if (Math.abs(den) < 1e-6) return null;
+  const a = (n * suv - su * sv) / den;
+  return [a, (sv - a * su) / n]; // v = a*u + b
+}
+
+/** Intersección de una arista vertical (x=aL*y+bL) con una horizontal (y=aT*x+bT). */
+function intersect(vert, horz){
+  const [aL, bL] = vert, [aT, bT] = horz;
+  const denom = 1 - aL * aT;
+  if (Math.abs(denom) < 1e-6) return null;
+  const x = (aL * bT + bL) / denom;
+  return [x, aT * x + bT];
+}
+
+/** Afina las 4 esquinas de la baldosa por detección de bordes del marco. Devuelve
+ * las esquinas originales si algo no cuadra (nunca empeora la captura). */
+export function refineTileCorners(data, w, h, corners, rotation){
+  const square = [[0, 0], [1, 0], [1, 1], [0, 1]];
+  const H = computeHomography(square, corners);
+  const tileSpan = Math.hypot(corners[1][0] - corners[0][0], corners[1][1] - corners[0][1]);
+  if (!tileSpan) return corners;
+  // Umbral oscuro relativo a la exposición (mitad del blanco de la banda).
+  const whiteSamples = [[F + B / 2, 0.5], [1 - F - B / 2, 0.5]].map(([nx, ny]) => {
+    const [rx, ry] = rotPoint(nx, ny, rotation);
+    const [px, py] = applyHomography(H, rx, ry);
+    return lumaAt(data, w, Math.max(0, Math.min(w - 1, Math.round(px))), Math.max(0, Math.min(h - 1, Math.round(py))));
+  });
+  const thr = Math.max(...whiteSamples, 60) * 0.55;
+  const margin = tileSpan * 0.14;            // arranca fuera del guide (papel blanco)
+  const steps = Math.round(tileSpan * 0.4);  // alcance del barrido hacia el centro
+  const minRun = Math.max(4, Math.round(F * tileSpan * 0.45)); // ~mitad del grosor del marco
+  const fracs = [0.28, 0.4, 0.5, 0.6, 0.72]; // posiciones de barrido (evita las esquinas)
+  // Caja aproximada del guide (ejes de la imagen).
+  const xL0 = corners[0][0], xR0 = corners[1][0], yT0 = corners[0][1], yB0 = corners[3][1];
+  const lerp = (a, b, t) => a + (b - a) * t;
+
+  const leftPts = [], rightPts = [], topPts = [], botPts = [];
+  for (const t of fracs){
+    const y = lerp(yT0, yB0, t), x = lerp(xL0, xR0, t);
+    const pL = scanFrameEdge(data, w, h, xL0 - margin, y, 1, 0, steps, thr, minRun);
+    const pR = scanFrameEdge(data, w, h, xR0 + margin, y, -1, 0, steps, thr, minRun);
+    const pT = scanFrameEdge(data, w, h, x, yT0 - margin, 0, 1, steps, thr, minRun);
+    const pB = scanFrameEdge(data, w, h, x, yB0 + margin, 0, -1, steps, thr, minRun);
+    if (pL) leftPts.push(pL); if (pR) rightPts.push(pR); if (pT) topPts.push(pT); if (pB) botPts.push(pB);
+  }
+  if (leftPts.length < 3 || rightPts.length < 3 || topPts.length < 3 || botPts.length < 3) return corners;
+  const left = fitLine(leftPts, 'xy'), right = fitLine(rightPts, 'xy');
+  const top = fitLine(topPts, 'yx'), bot = fitLine(botPts, 'yx');
+  if (!left || !right || !top || !bot) return corners;
+  const refined = [intersect(left, top), intersect(right, top), intersect(right, bot), intersect(left, bot)];
+  for (const c of refined){ if (!c) return corners; const [x, y] = c; if (x < -w || x > 2 * w || y < -h || y > 2 * h) return corners; }
+  // Cordura: el área afinada debe parecerse a la del guide (no colapsada ni gigante).
+  const refSpan = Math.hypot(refined[1][0] - refined[0][0], refined[1][1] - refined[0][1]);
+  if (refSpan < tileSpan * 0.5 || refSpan > tileSpan * 1.6) return corners;
+  return refined;
+}
+
 /** Promedia el RGB sobre una caja centrada (en coordenadas normalizadas) del lienzo canónico. */
 function avgCanonRegion(data, size, cx, cy, halfN){
   const x0 = Math.max(0, Math.floor((cx - halfN) * size));

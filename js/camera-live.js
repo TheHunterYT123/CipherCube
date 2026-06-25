@@ -16,7 +16,7 @@
 import {
   FACE_LABELS, FACE_ORDER, TIERS, tryDecryptPayload, parseDecodedPayload, dataUrlForFileEntry,
 } from './crypto.js';
-import { detectTile, warpToCanonical, decodeCanonicalFaces, diagnoseCanonicalFaces, FACE_COUNT } from './cube3d.js';
+import { detectTile, warpToCanonical, refineTileCorners, decodeCanonicalFaces, diagnoseCanonicalFaces, FACE_COUNT } from './cube3d.js';
 import { showToast, showError } from './ui.js';
 
 const SAMPLE_SIZE = 480;        // lado del lienzo cuadrado de muestreo
@@ -124,7 +124,11 @@ export function createLiveScanner(config){
 
   function captureFace(detection){
     const img = cleanCtx.getImageData(0, 0, SAMPLE_SIZE, SAMPLE_SIZE);
-    const canon = warpToCanonical(img.data, SAMPLE_SIZE, SAMPLE_SIZE, guideCorners(), detection.rotation);
+    // Afinar las esquinas reales del marco antes de enderezar: la detección es
+    // tolerante a desalineación pero la rejilla de datos no, así que sin esto la
+    // lectura sale corrida aunque la cara se haya "detectado bien".
+    const corners = refineTileCorners(img.data, SAMPLE_SIZE, SAMPLE_SIZE, guideCorners(), detection.rotation);
+    const canon = warpToCanonical(img.data, SAMPLE_SIZE, SAMPLE_SIZE, corners, detection.rotation);
     const isNew = !captured[detection.faceIndex];
     captured[detection.faceIndex] = canon;
     stableFace = -1; stableCount = 0;
