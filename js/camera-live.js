@@ -16,7 +16,7 @@
 import {
   FACE_LABELS, FACE_ORDER, TIERS, tryDecryptPayload, parseDecodedPayload, dataUrlForFileEntry,
 } from './crypto.js';
-import { detectTile, warpToCanonical, refineTileCorners, decodeCanonicalFaces, diagnoseCanonicalFaces, FACE_COUNT } from './cube3d.js';
+import { detectTile, warpToCanonical, refineTileCorners, decodeCanonicalFaces, diagnoseCanonicalFaces, dataSampleBoxes, FACE_COUNT } from './cube3d.js';
 import { showToast, showError } from './ui.js';
 
 const SAMPLE_SIZE = 720;        // lado del lienzo cuadrado de muestreo (más px/celda en Pro)
@@ -323,9 +323,42 @@ function renderCubeReveal(rawText, totalCorrected){
   }
 }
 
+/* Arma UNA imagen con las 6 caras ya enderezadas (lo que ve el decodificador) y
+   dibuja encima la rejilla de muestreo en magenta. Mirándola se ve al instante si
+   el problema es de ALINEACIÓN (las cajas no caen centradas en cada cuadro de
+   color), de COLOR (caen bien pero los colores salen apagados/cambiados) o de
+   captura (la cara está torcida/recortada). Devuelve un dataURL PNG. */
+function buildDiagnosticDataURL(canonByFace, grid){
+  const cols = 3, rows = Math.ceil(FACE_COUNT / cols);
+  const thumb = 320, pad = 10, labelH = 20;
+  const cv = document.createElement('canvas');
+  cv.width = cols * thumb + (cols + 1) * pad;
+  cv.height = rows * (thumb + labelH) + (rows + 1) * pad;
+  const ctx = cv.getContext('2d');
+  ctx.fillStyle = '#1a1a1a'; ctx.fillRect(0, 0, cv.width, cv.height);
+  ctx.font = '13px sans-serif'; ctx.textBaseline = 'top';
+  const boxes = dataSampleBoxes(grid);
+  const tmp = document.createElement('canvas');
+  for (let f = 0; f < FACE_COUNT; f++){
+    const col = f % cols, row = (f / cols) | 0;
+    const x = pad + col * (thumb + pad), y = pad + row * (thumb + labelH + pad);
+    const canon = canonByFace[f];
+    ctx.fillStyle = '#fff';
+    ctx.fillText(`Cara ${f + 1} — ${FACE_LABELS[FACE_ORDER[f]]}` + (canon ? '' : '  (sin capturar)'), x, y + 3);
+    const oy = y + labelH;
+    if (!canon) continue;
+    tmp.width = canon.size; tmp.height = canon.size;
+    tmp.getContext('2d').putImageData(new ImageData(canon.data, canon.size, canon.size), 0, 0);
+    ctx.drawImage(tmp, x, oy, thumb, thumb);
+    ctx.strokeStyle = 'rgba(255,0,255,0.85)'; ctx.lineWidth = 1;
+    for (const b of boxes) ctx.strokeRect(x + b.x * thumb, oy + b.y * thumb, b.w * thumb, b.h * thumb);
+  }
+  return cv.toDataURL('image/png');
+}
+
 /* Panel de diagnóstico cuando el descifrado falla por lectura de color: dice qué
    caras tienen colores ilegibles, en el panel persistente (no en un toast fugaz). */
-function renderCubeDiagnostic(report){
+function renderCubeDiagnostic(report, canonByFace){
   const reveal = document.getElementById('liveDecodeReveal');
   reveal.innerHTML = '';
   const title = document.createElement('div');
@@ -354,6 +387,32 @@ function renderCubeDiagnostic(report){
     body.appendChild(sub);
   }
   reveal.appendChild(body);
+
+  // Botón de diagnóstico técnico: guarda lo que VE el decodificador (6 caras
+  // enderezadas + rejilla de muestreo) para inspeccionar la causa real del fallo.
+  if (canonByFace){
+    const tools = document.createElement('div');
+    tools.style.marginTop = '12px';
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'btn-secondary';
+    btn.textContent = 'Guardar diagnóstico (imagen)';
+    btn.onclick = () => {
+      try{
+        const url = buildDiagnosticDataURL(canonByFace, TIERS[report.tier].grid);
+        const a = document.createElement('a');
+        a.href = url; a.download = 'ciphercube-diagnostico.png';
+        document.body.appendChild(a); a.click(); a.remove();
+        showToast('Diagnóstico guardado. Compártelo para localizar el fallo.');
+      } catch(e){ showError('No se pudo generar el diagnóstico: ' + e.message); }
+    };
+    tools.appendChild(btn);
+    const hint = document.createElement('div');
+    hint.style.marginTop = '6px'; hint.style.fontSize = '0.85em'; hint.style.opacity = '0.8';
+    hint.textContent = 'Descarga una imagen con las 6 caras tal como las lee la app y la rejilla de lectura encima. Sirve para diagnosticar por qué falla.';
+    tools.appendChild(hint);
+    reveal.appendChild(tools);
+  }
 }
 
 const cubeScanner = createLiveScanner({
@@ -378,7 +437,7 @@ const cubeScanner = createLiveScanner({
       // relanza un error corto para el toast.
       const report = diagnoseCanonicalFaces(canonByFace, TIERS);
       if (report){
-        renderCubeDiagnostic(report);
+        renderCubeDiagnostic(report, canonByFace);
         document.getElementById('liveDecodeOutput').classList.remove('hidden');
         throw new Error('No se pudo descifrar. Mira el detalle por cara abajo.');
       }

@@ -451,6 +451,25 @@ export function sampleFaceCells(canon, grid){
   return sampleFaceCellsRGB(canon, grid).map(nearestPaletteIndex);
 }
 
+/** SOLO DIAGNÓSTICO. Devuelve, para cada celda de datos en orden de lectura, la
+ * caja normalizada (0..1 sobre el lienzo canónico) donde el lector toma su color.
+ * Sirve para dibujar encima de la cara enderezada y ver si la rejilla cae
+ * centrada en cada cuadro de color (alineación) o corrida (la lectura sale
+ * basura). DI, dataSpan y el 0.22 deben coincidir con sampleFaceCellsRGB. */
+export function dataSampleBoxes(grid){
+  const dataSpan = 1 - 2 * DI;
+  const cellN = dataSpan / grid;
+  const half = cellN * 0.22;
+  const boxes = [];
+  for (let r = 0; r < grid; r++){
+    for (let c = 0; c < grid; c++){
+      const nx = DI + (c + 0.5) * cellN, ny = DI + (r + 0.5) * cellN;
+      boxes.push({ cx: nx, cy: ny, x: nx - half, y: ny - half, w: 2 * half, h: 2 * half });
+    }
+  }
+  return boxes;
+}
+
 /** Clasifica las 6 caras por color ADAPTATIVO (clustering global): muestrea el
  * RGB calibrado de cada celda de todas las caras y deja que colorcluster mapee
  * los colores como los ve la cámara. Devuelve {faceIndex: cells}. */
