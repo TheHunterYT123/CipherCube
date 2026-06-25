@@ -10,25 +10,14 @@
    El control de acceso REAL se hará en el servidor cuando exista el backend.
    ========================================================= */
 import { showToast } from './ui.js';
+import { admin as adminApi } from './api.js';
 
-/* Correos con acceso al panel (provisional; el backend lo validará de verdad). */
+/* Correos con acceso al panel: PISTA visual para el frontend (mostrar/ocultar
+   el botón). El control de acceso REAL lo hace el backend con users.is_admin;
+   estas rutas devuelven 403 a cualquier cuenta no-admin. */
 export const ADMIN_EMAILS = ['thehunter9856@gmail.com'];
 
-/* ---------- Utilidades de datos ---------- */
-function mulberry32(seed){
-  return function(){
-    seed |= 0; seed = (seed + 0x6D2B79F5) | 0;
-    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-const rng = mulberry32(20260624);
-const rand = (min, max) => min + (max - min) * rng();
-const randInt = (min, max) => Math.floor(rand(min, max + 1));
-const pick = arr => arr[Math.floor(rng() * arr.length)];
-const dayMs = 86400000;
-
+/* ---------- Utilidades de formato ---------- */
 function fmtMoney(n, cur = 'USD'){
   return new Intl.NumberFormat('es-MX', { style: 'currency', currency: cur, maximumFractionDigits: 2 }).format(n);
 }
@@ -44,189 +33,29 @@ function timeAgo(d){
 }
 function esc(s){ return String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
 
-/* ---------- Generación de datos de ejemplo ---------- */
-const FIRST = ['Ana', 'Luis', 'María', 'Carlos', 'Sofía', 'Diego', 'Valentina', 'Jorge', 'Camila', 'Andrés', 'Lucía', 'Mateo', 'Daniela', 'Pablo', 'Renata', 'Hugo', 'Isabela', 'Tomás', 'Gabriela', 'Emilio'];
-const LAST = ['García', 'Martínez', 'López', 'Hernández', 'González', 'Pérez', 'Sánchez', 'Ramírez', 'Torres', 'Flores', 'Rivera', 'Gómez', 'Díaz', 'Cruz', 'Morales'];
-const COUNTRIES = [['🇲🇽', 'México'], ['🇪🇸', 'España'], ['🇨🇴', 'Colombia'], ['🇦🇷', 'Argentina'], ['🇺🇸', 'EE. UU.'], ['🇨🇱', 'Chile'], ['🇵🇪', 'Perú']];
-const PROVIDERS = ['stripe', 'paypal', 'mercadopago'];
+/* ---------- Etiquetas ---------- */
 const PROVIDER_LABEL = { stripe: 'Stripe', paypal: 'PayPal', mercadopago: 'MercadoPago' };
-const PLAN_PRICE = { plus: 4.99, boveda: 9.99 };
 
-let _cache = null;
-function buildMockData(){
-  if (_cache) return _cache;
-  const now = Date.now();
-  const users = [];
-  const N = 64;
-  for (let i = 0; i < N; i++){
-    const fn = pick(FIRST), ln = pick(LAST);
-    const created = now - randInt(0, 90) * dayMs - randInt(0, 86400) * 1000;
-    const r = rng();
-    const plan = r < 0.62 ? 'free' : (r < 0.86 ? 'plus' : 'boveda');
-    const lastLogin = now - randInt(0, 20) * dayMs - randInt(0, 86400) * 1000;
-    const [flag, country] = pick(COUNTRIES);
-    users.push({
-      id: 'u_' + (1000 + i),
-      name: `${fn} ${ln}`,
-      email: `${fn.toLowerCase()}.${ln.toLowerCase()}${randInt(1, 99)}@${pick(['gmail.com', 'outlook.com', 'proton.me', 'yahoo.com'])}`,
-      plan, createdAt: created, lastLogin,
-      status: (now - lastLogin) < 25 * dayMs ? 'active' : 'inactive',
-      country, flag,
-      cubes: randInt(0, 24),
-    });
-  }
-  users.sort((a, b) => b.createdAt - a.createdAt);
-
-  // Compras (pagos completados) a partir de usuarios de pago + algún reembolso.
-  const purchases = [];
-  let pid = 5000;
-  users.filter(u => u.plan !== 'free').forEach(u => {
-    const provider = pick(PROVIDERS);
-    purchases.push({
-      id: 'p_' + (pid++), userId: u.id, userEmail: u.email, plan: u.plan,
-      amount: PLAN_PRICE[u.plan], currency: 'USD', provider,
-      status: rng() < 0.05 ? 'refunded' : 'paid',
-      createdAt: u.createdAt + randInt(60, 6000) * 1000,
-    });
-  });
-  purchases.sort((a, b) => b.createdAt - a.createdAt);
-
-  // Intentos de compra (clics en "comprar"): algunos completan, otros se abandonan.
-  const attempts = [];
-  let aid = 8000;
-  const paidUserIds = new Set(purchases.filter(p => p.status === 'paid').map(p => p.userId));
-  // Cada compra pagada tuvo su intento…
-  purchases.forEach(p => {
-    attempts.push({
-      id: 'a_' + (aid++), userId: p.userId, userEmail: p.userEmail, plan: p.plan,
-      provider: p.provider, outcome: p.status === 'refunded' ? 'completed' : 'completed',
-      createdAt: p.createdAt - randInt(20, 300) * 1000,
-    });
-  });
-  // …y muchos clicaron pero no completaron (abandono).
-  const abandonCount = Math.round(purchases.length * 1.8);
-  for (let i = 0; i < abandonCount; i++){
-    const u = pick(users);
-    attempts.push({
-      id: 'a_' + (aid++), userId: u.id, userEmail: u.email,
-      plan: rng() < 0.7 ? 'plus' : 'boveda', provider: pick(PROVIDERS),
-      outcome: rng() < 0.55 ? 'abandoned' : 'started',
-      createdAt: now - randInt(0, 60) * dayMs - randInt(0, 86400) * 1000,
-    });
-  }
-  attempts.sort((a, b) => b.createdAt - a.createdAt);
-
-  // Logs de eventos.
-  const logs = [];
-  let lid = 9000;
-  const LOG_TYPES = [
-    ['register', 'info', '🆕', u => `Nuevo registro: ${u.email}`],
-    ['login', 'info', '🔓', u => `Inicio de sesión: ${u.email}`],
-    ['login_failed', 'warn', '⚠️', u => `Login fallido para ${u.email}`],
-    ['checkout_started', 'info', '🛒', u => `Checkout iniciado (${u.email})`],
-    ['payment_succeeded', 'info', '💳', u => `Pago confirmado de ${u.email}`],
-    ['payment_failed', 'error', '❌', u => `Pago rechazado de ${u.email}`],
-    ['plan_granted', 'info', '⭐', u => `Plan concedido a ${u.email}`],
-    ['password_changed', 'info', '🔑', u => `Cambio de contraseña: ${u.email}`],
-    ['rate_limited', 'warn', '🚧', u => `Rate limit alcanzado (${u.email})`],
-    ['server_error', 'error', '🔥', () => `Error 500 en /api/payments/checkout`],
-  ];
-  for (let i = 0; i < 80; i++){
-    const [type, sev, icon, msg] = pick(LOG_TYPES);
-    const u = pick(users);
-    logs.push({
-      id: 'l_' + (lid++), type, severity: sev, icon,
-      message: msg(u), userEmail: u.email,
-      createdAt: now - randInt(0, 14) * dayMs - randInt(0, 86400) * 1000,
-    });
-  }
-  logs.sort((a, b) => b.createdAt - a.createdAt);
-
-  // Series temporales (30 días): ingresos y registros.
-  const days = 30;
-  const revenueSeries = [], signupSeries = [];
-  for (let d = days - 1; d >= 0; d--){
-    const date = now - d * dayMs;
-    const dayStart = date - dayMs, dayEnd = date;
-    const rev = purchases.filter(p => p.status === 'paid' && p.createdAt >= dayStart && p.createdAt < dayEnd)
-      .reduce((s, p) => s + p.amount, 0);
-    const sign = users.filter(u => u.createdAt >= dayStart && u.createdAt < dayEnd).length;
-    revenueSeries.push({ date, value: rev });
-    signupSeries.push({ date, value: sign });
-  }
-
-  _cache = { users, purchases, attempts, logs, revenueSeries, signupSeries, generatedAt: now };
-  return _cache;
+/* ---------- Capa de datos (backend real: /api/admin/*) ----------
+   Las colecciones (users/purchases/attempts/logs) se cachean en memoria para
+   que el drawer de usuario pueda cruzarlas sin repetir peticiones. El botón
+   "Actualizar" limpia la caché. Los agregados (overview/stats/settings) se
+   piden siempre frescos. El backend exige sesión admin (responde 403 si no). */
+let _coll = {};
+export function clearAdminCache(){ _coll = {}; }
+async function getColl(name){
+  if (!_coll[name]) _coll[name] = await adminApi[name]();
+  return _coll[name];
 }
 
-/* ---------- Capa de datos (hoy mock, mañana backend) ----------
-   Cada método será `return fetch('/api/admin/...').then(r=>r.json())`. */
 export const AdminAPI = {
-  async overview(){
-    const d = buildMockData();
-    const paid = d.purchases.filter(p => p.status === 'paid');
-    const revenue = paid.reduce((s, p) => s + p.amount, 0);
-    const monthAgo = Date.now() - 30 * dayMs;
-    const revenue30 = paid.filter(p => p.createdAt >= monthAgo).reduce((s, p) => s + p.amount, 0);
-    const newUsers30 = d.users.filter(u => u.createdAt >= monthAgo).length;
-    const buyers = new Set(paid.map(p => p.userId)).size;
-    const clickers = new Set(d.attempts.map(a => a.userId)).size;
-    return {
-      totalUsers: d.users.length,
-      activeUsers: d.users.filter(u => u.status === 'active').length,
-      revenue, revenue30, newUsers30,
-      conversion: clickers ? (buyers / clickers) : 0,
-      planDistribution: {
-        free: d.users.filter(u => u.plan === 'free').length,
-        plus: d.users.filter(u => u.plan === 'plus').length,
-        boveda: d.users.filter(u => u.plan === 'boveda').length,
-      },
-      revenueSeries: d.revenueSeries,
-      signupSeries: d.signupSeries,
-      recent: d.logs.slice(0, 8),
-    };
-  },
-  async users(){ return buildMockData().users; },
-  async purchases(){ return buildMockData().purchases; },
-  async attempts(){ return buildMockData().attempts; },
-  async logs(){ return buildMockData().logs; },
-  async stats(){
-    const d = buildMockData();
-    const paid = d.purchases.filter(p => p.status === 'paid');
-    const byProvider = {}, byPlan = {};
-    PROVIDERS.forEach(p => byProvider[p] = 0);
-    paid.forEach(p => { byProvider[p.provider] += p.amount; byPlan[p.plan] = (byPlan[p.plan] || 0) + p.amount; });
-    const clicks = d.attempts.length;
-    const started = d.attempts.filter(a => a.outcome !== 'abandoned').length;
-    const completed = d.attempts.filter(a => a.outcome === 'completed').length;
-    const countries = {};
-    d.users.forEach(u => { countries[u.country] = (countries[u.country] || 0) + 1; });
-    return {
-      funnel: [
-        { label: 'Visitó Tienda', value: Math.round(clicks * 1.7) },
-        { label: 'Clic en comprar', value: clicks },
-        { label: 'Inició checkout', value: started },
-        { label: 'Pago completado', value: completed },
-      ],
-      byProvider, byPlan,
-      arpu: paid.length ? paid.reduce((s, p) => s + p.amount, 0) / new Set(paid.map(p => p.userId)).size : 0,
-      refundRate: d.purchases.length ? d.purchases.filter(p => p.status === 'refunded').length / d.purchases.length : 0,
-      topCountries: Object.entries(countries).sort((a, b) => b[1] - a[1]).slice(0, 6),
-    };
-  },
-  async settings(){
-    return {
-      providers: [
-        { key: 'stripe', label: 'Stripe', configured: false },
-        { key: 'paypal', label: 'PayPal', configured: false },
-        { key: 'mercadopago', label: 'MercadoPago', configured: false },
-      ],
-      prices: [
-        { plan: 'Plus', usd: 4.99, mxn: 99 },
-        { plan: 'Bóveda', usd: 9.99, mxn: 199 },
-      ],
-    };
-  },
+  overview(){ return adminApi.overview(); },
+  users(){ return getColl('users'); },
+  purchases(){ return getColl('purchases'); },
+  attempts(){ return getColl('attempts'); },
+  logs(){ return getColl('logs'); },
+  stats(){ return adminApi.stats(); },
+  settings(){ return adminApi.settings(); },
 };
 
 /* ---------- Componentes de gráfico (SVG) ---------- */
@@ -473,25 +302,27 @@ async function renderSettings(el){
   const s = await AdminAPI.settings();
   const provRows = s.providers.map(p => `<div class="drawer-kv"><span class="dk-label">${p.label}</span><span class="dk-val">${p.configured ? statusBadge('active') : statusBadge('inactive')}</span></div>`).join('');
   const priceRows = s.prices.map(p => `<div class="drawer-kv"><span class="dk-label">${p.plan}</span><span class="dk-val">${fmtMoney(p.usd, 'USD')} · ${fmtMoney(p.mxn, 'MXN')}</span></div>`).join('');
+  const adminList = (s.adminEmails && s.adminEmails.length ? s.adminEmails : ADMIN_EMAILS);
   el.innerHTML = `
     <div class="admin-section-head"><div><h2>Ajustes</h2><div class="ash-sub">Configuración del sistema (lectura)</div></div></div>
     <div class="chart-grid">
       <div class="chart-card"><div class="cc-title">Proveedores de pago</div><div class="cc-sub">Estado según el backend</div>${provRows}</div>
       <div class="chart-card"><div class="cc-title">Precios de planes</div><div class="cc-sub">Configurados en el servidor</div>${priceRows}</div>
     </div>
-    <div class="chart-card"><div class="cc-title">Acceso de administrador</div><div class="cc-sub">Correos con permiso (provisional)</div>${ADMIN_EMAILS.map(e => `<div class="drawer-kv"><span class="dk-label">${esc(e)}</span><span class="dk-val">${statusBadge('active')}</span></div>`).join('')}</div>
-    <div class="chart-card" style="margin-top:14px;border-color:var(--color-danger)"><div class="cc-title" style="color:var(--color-danger)">⚠ Modo demostración</div><div class="cc-sub" style="margin-bottom:0">Los datos de este panel son de ejemplo. Cuando exista el backend, cada sección se conecta a <code>/api/admin/*</code> y el control de acceso se valida en el servidor (no basta con ocultar el botón en el frontend).</div></div>`;
+    <div class="chart-card"><div class="cc-title">Acceso de administrador</div><div class="cc-sub">Cuentas con <code>is_admin</code> en el servidor</div>${adminList.map(e => `<div class="drawer-kv"><span class="dk-label">${esc(e)}</span><span class="dk-val">${statusBadge('active')}</span></div>`).join('')}</div>`;
 }
 
 const RENDERERS = { overview: renderOverview, users: renderUsers, purchases: renderPurchases, attempts: renderAttempts, logs: renderLogs, stats: renderStats, settings: renderSettings };
 
 /* ---------- Drawer de usuario ---------- */
 async function openUserDrawer(userId){
-  const d = buildMockData();
-  const u = d.users.find(x => x.id === userId);
+  const [users, allPurchases, allAttempts] = await Promise.all([
+    getColl('users'), getColl('purchases'), getColl('attempts'),
+  ]);
+  const u = users.find(x => x.id === userId);
   if (!u) return;
-  const purchases = d.purchases.filter(p => p.userId === userId);
-  const attempts = d.attempts.filter(a => a.userId === userId);
+  const purchases = allPurchases.filter(p => p.userId === userId);
+  const attempts = allAttempts.filter(a => a.userId === userId);
   const body = document.getElementById('adminDrawerBody');
   const spent = purchases.filter(p => p.status === 'paid').reduce((s, p) => s + p.amount, 0);
   body.innerHTML = `
@@ -553,7 +384,7 @@ export function initAdmin(){
   tabsWrap.querySelectorAll('.admin-tab').forEach(t => t.addEventListener('click', () => selectTab(t.dataset.tab)));
 
   document.getElementById('adminCloseBtn').addEventListener('click', closeAdmin);
-  document.getElementById('adminRefreshBtn').addEventListener('click', () => { _cache = null; selectTab(currentTab); showToast('Datos actualizados.'); });
+  document.getElementById('adminRefreshBtn').addEventListener('click', () => { clearAdminCache(); selectTab(currentTab); showToast('Datos actualizados.'); });
   document.getElementById('adminDrawerClose').addEventListener('click', closeUserDrawer);
   document.getElementById('adminDrawerBackdrop').addEventListener('click', closeUserDrawer);
 

@@ -40,7 +40,25 @@ export async function initAuth(){
   } else {
     applyUser(null);
   }
+  await handleEmailVerification();
   await handlePaymentReturn();
+}
+
+/* ---- Verificación de correo (enlace ?verify=token) ---- */
+async function handleEmailVerification(){
+  const params = new URLSearchParams(window.location.search);
+  const token = params.get('verify');
+  if (!token) return;
+  const clean = () => window.history.replaceState({}, '', window.location.pathname);
+  try{
+    await auth.verifyEmail(token);
+    showToast('¡Correo verificado! Gracias.');
+    if (isLoggedIn()) await refreshSession();
+  } catch(e){
+    showError(e.message || 'No se pudo verificar el correo.');
+  } finally {
+    clean();
+  }
 }
 
 async function refreshSession(){
@@ -79,11 +97,22 @@ export function initAuthUI(){
     const prev = submitBtn.textContent;
     submitBtn.innerHTML = '<span class="spinner"></span> Procesando…';
     try{
-      const user = mode === 'register'
-        ? await auth.register({ email, password, displayName })
-        : await auth.login({ email, password });
-      applyUser(user);
-      showToast(mode === 'register' ? 'Cuenta creada. ¡Bienvenido!' : 'Sesión iniciada.');
+      if (mode === 'register'){
+        const user = await auth.register({ email, password, displayName });
+        applyUser(user);
+        showToast('Cuenta creada. Te enviamos un correo para verificar tu cuenta.');
+      } else {
+        const res = await auth.login({ email, password });
+        if (res.twoFactorRequired){
+          const user = await completeTwoFactor(res.challengeToken, hint);
+          if (!user) return; // cancelado
+          applyUser(user);
+          showToast('Sesión iniciada.');
+        } else {
+          applyUser(res.user);
+          showToast('Sesión iniciada.');
+        }
+      }
       document.getElementById('authPassword').value = '';
     } catch(e){
       hint.textContent = e.message || 'No se pudo completar la operación.';
@@ -93,6 +122,66 @@ export function initAuthUI(){
   });
 
   initPaymentSheet();
+}
+
+/* ---- Reto de segundo factor en el login ----
+   Muestra un modal pidiendo el código TOTP (o un código de recuperación) y
+   completa el login. Devuelve el usuario, o null si se cancela. */
+function completeTwoFactor(challengeToken, hintEl){
+  return new Promise(resolve => {
+    const backdrop = document.createElement('div');
+    backdrop.className = 'info-sheet-backdrop show';
+    backdrop.innerHTML = `
+      <div class="info-sheet" role="dialog" aria-modal="true">
+        <div class="is-handle"></div>
+        <div class="is-title">Verificación en dos pasos</div>
+        <div class="hint" data-role="msg" style="margin-bottom:10px;">Escribe el código de 6 dígitos de tu app autenticadora.</div>
+        <div class="field"><input type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="20"
+               data-role="code" placeholder="123456" style="text-align:center;letter-spacing:4px;font-size:18px"></div>
+        <button class="btn btn-primary" data-act="verify" style="margin-top:12px;">Verificar</button>
+        <button class="btn btn-secondary" data-act="recovery" style="margin-top:8px;">Usar código de recuperación</button>
+        <button class="btn btn-secondary" data-act="close" style="margin-top:8px;">Cancelar</button>
+      </div>`;
+    document.body.appendChild(backdrop);
+    const codeInput = backdrop.querySelector('[data-role="code"]');
+    const msg = backdrop.querySelector('[data-role="msg"]');
+    const verifyBtn = backdrop.querySelector('[data-act="verify"]');
+    let useRecovery = false;
+    setTimeout(() => codeInput.focus(), 50);
+
+    const close = (result) => { backdrop.remove(); resolve(result); };
+
+    backdrop.querySelector('[data-act="close"]').addEventListener('click', () => close(null));
+    backdrop.addEventListener('click', e => { if (e.target === backdrop) close(null); });
+    backdrop.querySelector('[data-act="recovery"]').addEventListener('click', () => {
+      useRecovery = !useRecovery;
+      msg.textContent = useRecovery
+        ? 'Escribe uno de tus códigos de recuperación.'
+        : 'Escribe el código de 6 dígitos de tu app autenticadora.';
+      codeInput.placeholder = useRecovery ? 'xxxx-xxxx' : '123456';
+      codeInput.value = ''; codeInput.focus();
+    });
+
+    async function submit(){
+      const value = codeInput.value.trim();
+      if (!value){ msg.textContent = 'Escribe el código.'; return; }
+      verifyBtn.disabled = true; const prev = verifyBtn.textContent;
+      verifyBtn.innerHTML = '<span class="spinner"></span> Verificando…';
+      try{
+        const payload = useRecovery
+          ? { challengeToken, recoveryCode: value }
+          : { challengeToken, code: value };
+        const user = await auth.twoFactor(payload);
+        close(user);
+      } catch(e){
+        msg.textContent = e.message || 'Código incorrecto.';
+        verifyBtn.disabled = false; verifyBtn.textContent = prev;
+        codeInput.select();
+      }
+    }
+    verifyBtn.addEventListener('click', submit);
+    codeInput.addEventListener('keydown', e => { if (e.key === 'Enter') submit(); });
+  });
 }
 
 export async function logout(){

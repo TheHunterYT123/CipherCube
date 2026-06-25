@@ -86,8 +86,10 @@ export const auth = {
   },
   async login({ email, password }){
     const data = await request('/api/auth/login', { method: 'POST', body: { email, password } });
+    // Puede devolver { twoFactorRequired, challengeToken } en vez de una sesión.
+    if (data.twoFactorRequired) return data;
     setTokens(data);
-    return data.user;
+    return { user: data.user };
   },
   async me(){
     const data = await request('/api/auth/me', { auth: true });
@@ -98,6 +100,22 @@ export const auth = {
     try{ if (refreshToken) await rawRequest('/api/auth/logout', { method: 'POST', body: { refreshToken } }); }
     finally{ clearTokens(); }
   },
+  /** Completa el login con el segundo factor. Guarda los tokens y devuelve el user. */
+  async twoFactor({ challengeToken, code, recoveryCode }){
+    const data = await request('/api/auth/2fa', { method: 'POST', body: { challengeToken, code, recoveryCode } });
+    setTokens(data);
+    return data.user;
+  },
+  verifyEmail(token){ return request('/api/auth/verify-email', { method: 'POST', body: { token } }); },
+  resendVerification(){ return request('/api/auth/resend-verification', { method: 'POST', auth: true }); },
+};
+
+/* ---- 2FA (gestión desde el perfil) ---- */
+export const twoFactor = {
+  status(){ return request('/api/profile/2fa', { auth: true }); },
+  setup(){ return request('/api/profile/2fa/setup', { method: 'POST', auth: true }); },
+  enable(code){ return request('/api/profile/2fa/enable', { method: 'POST', auth: true, body: { code } }); },
+  disable(password){ return request('/api/profile/2fa/disable', { method: 'POST', auth: true, body: { password } }); },
 };
 
 /* ---- Perfil ---- */
@@ -120,4 +138,15 @@ export const payments = {
   paypalCapture(orderId){
     return request('/api/payments/paypal/capture', { method: 'POST', auth: true, body: { orderId } });
   },
+};
+
+/* ---- Panel de administración (requiere cuenta admin) ---- */
+export const admin = {
+  overview(){ return request('/api/admin/overview', { auth: true }); },
+  users(){ return request('/api/admin/users', { auth: true }); },
+  purchases(){ return request('/api/admin/purchases', { auth: true }); },
+  attempts(){ return request('/api/admin/attempts', { auth: true }); },
+  logs(){ return request('/api/admin/logs', { auth: true }); },
+  stats(){ return request('/api/admin/stats', { auth: true }); },
+  settings(){ return request('/api/admin/settings', { auth: true }); },
 };

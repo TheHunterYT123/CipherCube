@@ -263,6 +263,27 @@ canvas.cube-canvas{display:block;width:100%;height:auto;border-radius:14px;margi
 .profile-row:first-child{border-top:none;}
 .profile-row .prlabel{color:var(--color-text-secondary);}
 .profile-row .prval{font-weight:600;color:var(--color-text);}
+/* ---- Lista de ajustes (perfil: cuenta, seguridad) ---- */
+.settings-list{background:var(--color-surface);border-radius:16px;overflow:hidden;margin-bottom:4px;}
+.settings-row{display:flex;align-items:center;gap:12px;width:100%;padding:14px 16px;background:none;border:none;border-top:1px solid var(--color-border);text-align:left;font:inherit;color:var(--color-text);cursor:pointer;}
+.settings-list>.settings-row:first-child{border-top:none;}
+.settings-row:active{background:var(--color-surface-2);}
+.settings-row .sr-icon{flex-shrink:0;width:30px;height:30px;border-radius:9px;background:var(--color-surface-2);display:flex;align-items:center;justify-content:center;}
+.settings-row .sr-icon svg{width:16px;height:16px;stroke:var(--color-text);fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;}
+.settings-row .sr-label{flex:1;font-size:14.5px;font-weight:600;}
+.settings-row .sr-chev{flex-shrink:0;font-size:19px;line-height:1;color:var(--color-text-tertiary);transition:transform .2s;}
+.settings-row.open .sr-chev{transform:rotate(90deg);}
+.settings-row.danger .sr-label{color:var(--color-danger);}
+.settings-row.danger .sr-icon svg{stroke:var(--color-danger);}
+.settings-subpanel.show{padding:2px 16px 16px;border-top:1px solid var(--color-border);background:var(--color-surface-2);}
+.hint-center{text-align:center;}
+
+/* ---- Tarjeta de aviso (perfil: correo sin verificar, etc.) ---- */
+.notice-card{display:flex;flex-direction:column;align-items:center;text-align:center;padding:18px 16px;}
+.notice-card .notice-icon{flex-shrink:0;width:34px;height:34px;border-radius:50%;background:color-mix(in srgb, var(--color-danger) 16%, transparent);display:flex;align-items:center;justify-content:center;margin-bottom:10px;}
+.notice-card .notice-icon svg{width:17px;height:17px;stroke:var(--color-danger);fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;}
+.notice-card .notice-body{width:100%;text-align:center;}
+.notice-card .notice-body .prlabel{font-weight:700;color:var(--color-text);}
 .mycube-item{display:flex;justify-content:space-between;align-items:center;background:var(--color-surface);border-radius:10px;padding:11px 13px;margin-bottom:8px;font-size:12.5px;}
 .mycube-item .mt{font-weight:600;color:var(--color-text);}
 .mycube-item .mts{color:var(--color-text-tertiary);font-size:11px;}
