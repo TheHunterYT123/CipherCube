@@ -97,7 +97,8 @@ function initTierChips(){
     syncHighEccVisibility();
     updateSecretCounter();
   }));
-  document.getElementById('highEccToggle').addEventListener('change', e => {
+  const highEccToggle = document.getElementById('highEccToggle');
+  if (highEccToggle) highEccToggle.addEventListener('change', e => {
     highEccEnabled = e.target.checked;
     updateSecretCounter();
   });
@@ -220,7 +221,8 @@ function resetCreateForm(){
   hiddenToggle.checked = false;
   document.getElementById('hiddenFields').classList.remove('show');
   highEccEnabled = false;
-  document.getElementById('highEccToggle').checked = false;
+  const highEccToggleEl = document.getElementById('highEccToggle');
+  if (highEccToggleEl) highEccToggleEl.checked = false;
   attachedSecretFiles = [];
   renderAttachedFiles();
   updateSecretCounter();
@@ -665,53 +667,62 @@ function registerServiceWorker(){
   });
 }
 
-/* ---- Bootstrap ---- */
+/* ---- Bootstrap ----
+   Cada paso se ejecuta aislado: si uno falla (p. ej. por un elemento ausente
+   durante una transición de caché de la PWA), se registra y el resto sigue. Así
+   un fallo puntual nunca vuelve a tumbar toda la app (navegación incluida). */
+function safe(label, fn){
+  try { fn(); } catch (e){ console.error(`[init] ${label} falló:`, e); }
+}
 function initApp(){
-  applyTheme();
-  loadArgon2(); // en segundo plano, no bloqueante: si falla o tarda, buildPayload usa PBKDF2
-  initNavigation();
-  initCamera();
-  initLiveScanner();
+  safe('applyTheme', applyTheme);
+  safe('loadArgon2', loadArgon2); // en segundo plano: si falla o tarda, buildPayload usa PBKDF2
+  safe('initNavigation', initNavigation);
+  safe('initCamera', initCamera);
+  safe('initLiveScanner', initLiveScanner);
   let prevScreen = 'inicio';
-  onScreenChange(name => {
+  safe('onScreenChange', () => onScreenChange(name => {
     if (name==='perfil') renderPerfil();
     if (name==='camara'){ resetCameraScreen(); startLiveScanner(); }
     if (prevScreen==='camara' && name!=='camara'){ stopLiveScanner(); stopShareScanner(); }
     prevScreen = name;
+  }));
+
+  safe('miniInput', () => {
+    const miniInput = document.getElementById('miniInput');
+    if (miniInput) miniInput.addEventListener('input', e => {
+      clearTimeout(miniPreviewDebounce);
+      miniPreviewDebounce = setTimeout(() => updateMiniPreview(e.target.value), 150);
+    });
+    updateMiniPreview('');
+    const useGrid = document.querySelector('.use-grid');
+    if (useGrid) applyStagger(useGrid);
   });
 
-  document.getElementById('miniInput').addEventListener('input', e => {
-    clearTimeout(miniPreviewDebounce);
-    miniPreviewDebounce = setTimeout(() => updateMiniPreview(e.target.value), 150);
-  });
-  updateMiniPreview('');
-  const useGrid = document.querySelector('.use-grid');
-  if (useGrid) applyStagger(useGrid);
+  safe('initCrearSegmented', initCrearSegmented);
+  safe('initTierChips', initTierChips);
+  safe('initFileAttach', initFileAttach);
+  safe('initHiddenToggle', initHiddenToggle);
+  safe('initHiddenLock', initHiddenLock);
+  safe('initBovedaLock', initBovedaLock);
+  safe('initGenerate', initGenerate);
+  safe('initResultView', initResultView);
+  safe('initShamirSplit', initShamirSplit);
+  safe('refreshTierLocks', () => { refreshTierLocks(); updateSecretCounter(); });
 
-  initCrearSegmented();
-  initTierChips();
-  initFileAttach();
-  initHiddenToggle();
-  initHiddenLock();
-  initBovedaLock();
-  initGenerate();
-  initResultView();
-  initShamirSplit();
-  refreshTierLocks(); updateSecretCounter();
+  safe('initTienda', initTienda);
+  safe('refreshPlanButtons', refreshPlanButtons);
 
-  initTienda();
-  refreshPlanButtons();
-
-  initPerfil();
-  initAdmin();
-  initAuthUI();
+  safe('initPerfil', initPerfil);
+  safe('initAdmin', initAdmin);
+  safe('initAuthUI', initAuthUI);
   // Cuando cambia la sesión/plan (login, logout, compra), refresca toda la UI dependiente.
-  setOnAuthChange(() => {
+  safe('setOnAuthChange', () => setOnAuthChange(() => {
     refreshPlanButtons(); refreshTierLocks(); syncHiddenToggleWithPlan();
     updateSecretCounter(); renderPerfil();
-  });
-  initAuth(); // restaura sesión y procesa retorno de pago (async, no bloquea el arranque)
+  }));
+  safe('initAuth', initAuth); // restaura sesión y procesa retorno de pago (async, no bloquea)
 
-  registerServiceWorker();
+  safe('registerServiceWorker', registerServiceWorker);
 }
 initApp();
