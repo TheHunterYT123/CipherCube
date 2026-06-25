@@ -19,7 +19,7 @@ import {
 import { detectTile, warpToCanonical, refineTileCorners, decodeCanonicalFaces, diagnoseCanonicalFaces, FACE_COUNT } from './cube3d.js';
 import { showToast, showError } from './ui.js';
 
-const SAMPLE_SIZE = 480;        // lado del lienzo cuadrado de muestreo
+const SAMPLE_SIZE = 720;        // lado del lienzo cuadrado de muestreo (más px/celda en Pro)
 const GUIDE_INSET = 0.09;       // margen de la guía (coincide con el CSS .scan-frame)
 const STABLE_NEEDED = 4;        // lecturas estables consecutivas antes de capturar
 const DETECT_EVERY_MS = 110;    // periodicidad de detección

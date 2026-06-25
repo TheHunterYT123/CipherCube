@@ -89,6 +89,13 @@
             <div class="chip" data-tier="pro"><div class="cname pro-cname">Pro</div><div class="ccap">6464 B</div></div>
           </div>
 
+          <div class="lock-zone" id="highEccZone" style="display:none;">
+            <div class="toggle-row" id="highEccToggleRow">
+              <div><div class="ttitle">Alta corrección de errores</div><div class="tdesc">Dobla la corrección Reed-Solomon a cambio de capacidad de secreto. Útil si la cámara o la impresión dan problemas al descifrar.</div></div>
+              <label class="switch"><input type="checkbox" id="highEccToggle"><span class="sl"></span></label>
+            </div>
+          </div>
+
           <div class="field">
             <label class="field-label">Tu secreto</label>
             <div class="textarea-wrap">
@@ -369,15 +376,69 @@
         <div class="h2">Mis pedidos</div>
         <div id="myOrdersList"><div class="hint">Aún no has pedido ningún kit.</div></div>
 
-        <button class="btn btn-secondary" id="goToTiendaBtn" style="margin-top:22px;">Administrar plan en Tienda</button>
-        <button class="btn btn-primary" id="openAdminBtn" style="margin-top:10px;display:none;">🛡️ Panel de administración</button>
-        <button class="btn btn-secondary" id="changePassTrigger" style="margin-top:10px;">Cambiar contraseña</button>
-        <div class="collapse-body" id="changePassBody" style="margin-top:10px;">
-          <div class="field"><input type="password" id="currentPass" placeholder="Contraseña actual" autocomplete="current-password"></div>
-          <div class="field"><input type="password" id="newPass" placeholder="Nueva contraseña (mín. 8)" autocomplete="new-password"></div>
-          <button class="btn btn-primary btn-sm" id="changePassBtn">Guardar nueva contraseña</button>
+        <div class="h2">Cuenta</div>
+        <div class="settings-list">
+          <button class="settings-row" id="goToTiendaBtn" type="button">
+            <span class="sr-icon"><svg viewBox="0 0 24 24"><path d="M6 8h12l-1 12H7z"/><path d="M9 8V6a3 3 0 0 1 6 0v2"/></svg></span>
+            <span class="sr-label">Administrar plan</span>
+            <span class="sr-chev">›</span>
+          </button>
+          <button class="settings-row" id="openAdminBtn" type="button" style="display:none;">
+            <span class="sr-icon"><svg viewBox="0 0 24 24"><path d="M12 3.5 19.5 6.5V11c0 5-3.2 8.3-7.5 9.5C7.7 19.3 4.5 16 4.5 11V6.5z"/></svg></span>
+            <span class="sr-label">Panel de administración</span>
+            <span class="sr-chev">›</span>
+          </button>
         </div>
-        <button class="btn btn-secondary" id="logoutBtn" style="margin-top:10px;">Cerrar sesión</button>
+
+        <div class="card notice-card" id="emailVerifyNotice" style="display:none;border:1px solid var(--color-danger);">
+          <span class="notice-icon"><svg viewBox="0 0 24 24"><path d="M12 4 21 19H3Z"/><line x1="12" y1="9.5" x2="12" y2="13.8"/><circle cx="12" cy="16.6" r="0.6" fill="currentColor" stroke="none"/></svg></span>
+          <div class="notice-body">
+            <div class="prlabel">Correo sin verificar</div>
+            <div class="hint">Revisa tu bandeja de entrada y abre el enlace para verificar tu cuenta.</div>
+            <button class="btn btn-secondary btn-sm" id="resendVerifyBtn" style="margin-top:10px;">Reenviar correo de verificación</button>
+          </div>
+        </div>
+
+        <div class="h2">Seguridad</div>
+        <div class="settings-list">
+          <button class="settings-row" id="changePassTrigger" type="button">
+            <span class="sr-icon"><svg viewBox="0 0 24 24"><circle cx="8" cy="15.5" r="3.2"/><path d="M10.3 13.2 18.5 5M15.5 8l2.3 2.3M18.5 5l2 2"/></svg></span>
+            <span class="sr-label">Cambiar contraseña</span>
+            <span class="sr-chev">›</span>
+          </button>
+          <div class="collapse-body settings-subpanel" id="changePassBody">
+            <div class="field"><input type="password" id="currentPass" placeholder="Contraseña actual" autocomplete="current-password"></div>
+            <div class="field"><input type="password" id="newPass" placeholder="Nueva contraseña (mín. 8)" autocomplete="new-password"></div>
+            <button class="btn btn-primary btn-sm" id="changePassBtn">Guardar nueva contraseña</button>
+          </div>
+
+          <button class="settings-row" id="twoFATrigger" type="button" style="display:none;">
+            <span class="sr-icon"><svg viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2.2"/><path d="M8 11V7.5a4 4 0 0 1 8 0V11"/></svg></span>
+            <span class="sr-label">Verificación en dos pasos (2FA)</span>
+            <span class="sr-chev">›</span>
+          </button>
+          <div class="collapse-body settings-subpanel" id="twoFABody">
+            <div class="hint hint-center" id="twoFAStatus" style="margin-bottom:8px;">Cargando…</div>
+            <div id="twoFASetup" style="display:none;">
+              <img id="twoFAQr" alt="Código QR para tu app autenticadora" style="width:176px;height:176px;display:block;margin:6px auto;background:#fff;border-radius:8px;">
+              <div class="footnote" style="text-align:center;margin-bottom:8px;">¿No puedes escanear? Clave: <code id="twoFASecret"></code></div>
+              <div class="field"><input type="text" inputmode="numeric" maxlength="6" id="twoFACode" placeholder="Código de 6 dígitos" autocomplete="one-time-code"></div>
+              <button class="btn btn-primary btn-sm" id="twoFAEnableBtn">Activar 2FA</button>
+            </div>
+            <div id="twoFARecovery" style="display:none;"></div>
+            <button class="btn btn-primary btn-sm" id="twoFAStartBtn" style="display:none;">Activar verificación en dos pasos</button>
+            <div id="twoFADisable" style="display:none;">
+              <div class="field"><input type="password" id="twoFADisablePass" placeholder="Confirma tu contraseña" autocomplete="current-password"></div>
+              <button class="btn btn-secondary btn-sm" id="twoFADisableBtn">Desactivar 2FA</button>
+            </div>
+          </div>
+
+          <button class="settings-row danger" id="logoutBtn" type="button">
+            <span class="sr-icon"><svg viewBox="0 0 24 24"><path d="M9 4H6.5A1.5 1.5 0 0 0 5 5.5v13A1.5 1.5 0 0 0 6.5 20H9"/><path d="M14 8l4 4-4 4"/><path d="M18 12H9.5"/></svg></span>
+            <span class="sr-label">Cerrar sesión</span>
+          </button>
+        </div>
+
         <div class="footnote">Tu plan y tus compras viven en tu cuenta (servidor). El historial de cubos se guarda solo en este dispositivo (localStorage) y nunca incluye tu frase maestra ni el contenido del secreto.</div>
       </div>
     </div>
@@ -436,7 +497,6 @@
   <div class="admin-panel hidden" id="adminPanel">
     <div class="admin-topbar">
       <div class="at-title"><span class="at-dot"></span> Panel de administración</div>
-      <span class="admin-mock-badge">Datos de ejemplo</span>
       <div class="at-spacer"></div>
       <button class="admin-icon-btn" id="adminRefreshBtn" title="Actualizar">↻</button>
       <button class="admin-icon-btn" id="adminCloseBtn" title="Cerrar">✕</button>

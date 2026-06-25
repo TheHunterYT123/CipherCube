@@ -8,7 +8,7 @@ import {
   TIERS, MAGIC, SHARE_GRID, SHAMIR_MAGIC, PALETTE, FACE_LABELS, FACE_ORDER,
   effectiveCapacityForGrid, slotPlaintextLenForCapacity, capacityBytesForGrid,
   buildPayload, rsEncodePayloadToRaw, payloadToColorIndices, drawCubeNet,
-  composeSecretPayload, splitSecret, shareToPayload,
+  composeSecretPayload, splitSecret, shareToPayload, RS_PARITY_HIGH,
 } from './crypto.js';
 import { planAllows, planLabel, PLAN_REQUIREMENT_LABEL } from './plans.js';
 import { appState, addCubeToHistory, resetHistory } from './storage.js';
@@ -21,6 +21,7 @@ import {
 } from './auth.js';
 import { initAdmin, openAdmin, isAdminEmail } from './admin.js';
 import { getCurrentUser } from './auth.js';
+import { twoFactor as twoFactorApi, auth as authApi } from './api.js';
 import { initCamera, resetCameraScreen, stopShareScanner } from './camera.js';
 import { initLiveScanner, startLiveScanner, stopLiveScanner } from './camera-live.js';
 import { renderAllFaceTilesV2 } from './cube3d.js';
@@ -58,6 +59,7 @@ function initBovedaLock(){
 
 /* ---- Crear > Cubo: tier ---- */
 let selectedTier = 'mini';
+let highEccEnabled = false;
 function refreshTierLocks(){
   document.querySelectorAll('#tierOptions .chip').forEach(chip => {
     const locked = (chip.dataset.tier==='estandar' && !planAllows('standard_tier')) || (chip.dataset.tier==='pro' && !planAllows('pro_tier'));
@@ -71,6 +73,19 @@ function refreshTierLocks(){
   if (selectedTier!=='mini' && !planAllows(selectedTier==='estandar' ? 'standard_tier' : 'pro_tier')) {
     selectedTier='mini';
     document.querySelectorAll('#tierOptions .chip').forEach(c=>c.classList.toggle('selected', c.dataset.tier==='mini'));
+    syncHighEccVisibility();
+  }
+}
+/** Muestra el toggle de alta corrección solo cuando el tier activo es Pro; si se
+ * sale de Pro con el toggle marcado, se apaga (no aplica a otros tiers). */
+function syncHighEccVisibility(){
+  const zone = document.getElementById('highEccZone');
+  if (!zone) return;
+  zone.style.display = selectedTier === 'pro' ? 'block' : 'none';
+  if (selectedTier !== 'pro' && highEccEnabled){
+    highEccEnabled = false;
+    const toggle = document.getElementById('highEccToggle');
+    if (toggle) toggle.checked = false;
   }
 }
 function initTierChips(){
@@ -79,21 +94,28 @@ function initTierChips(){
     if (locked) { showError(`La capacidad ${chip.dataset.tier==='estandar'?'Estándar':'Pro'} requiere el plan ${PLAN_REQUIREMENT_LABEL.standard_tier}.`); return; }
     document.querySelectorAll('#tierOptions .chip').forEach(c=>c.classList.remove('selected'));
     chip.classList.add('selected'); selectedTier = chip.dataset.tier;
+    syncHighEccVisibility();
     updateSecretCounter();
   }));
+  document.getElementById('highEccToggle').addEventListener('change', e => {
+    highEccEnabled = e.target.checked;
+    updateSecretCounter();
+  });
+  syncHighEccVisibility();
 }
 
 /* ---- Crear > Cubo: archivos adjuntos + contador de capacidad ---- */
 let attachedSecretFiles = [];
+function currentParity(){ return (selectedTier === 'pro' && highEccEnabled) ? RS_PARITY_HIGH : undefined; }
 function maxSecretBytesForSelectedTier(){
-  const usable = effectiveCapacityForGrid(TIERS[selectedTier].grid).usable;
+  const usable = effectiveCapacityForGrid(TIERS[selectedTier].grid, currentParity()).usable;
   return slotPlaintextLenForCapacity(usable) - 2;
 }
 function updateSecretCounter(){
   const counterEl = document.getElementById('secretCounter');
   const attachHint = document.getElementById('attachHint');
   try{
-    const usable = effectiveCapacityForGrid(TIERS[selectedTier].grid).usable;
+    const usable = effectiveCapacityForGrid(TIERS[selectedTier].grid, currentParity()).usable;
     const slotLen = slotPlaintextLenForCapacity(usable);
     const packed = composeSecretPayload(document.getElementById('secretText').value, attachedSecretFiles);
     const used = new TextEncoder().encode(packed).length;
@@ -197,6 +219,8 @@ function resetCreateForm(){
   const hiddenToggle = document.getElementById('hiddenToggle');
   hiddenToggle.checked = false;
   document.getElementById('hiddenFields').classList.remove('show');
+  highEccEnabled = false;
+  document.getElementById('highEccToggle').checked = false;
   attachedSecretFiles = [];
   renderAttachedFiles();
   updateSecretCounter();
@@ -243,8 +267,9 @@ function initGenerate(){
     if (hiddenEnabled && decoyPass===realPass) { showError('La frase señuelo debe ser distinta de la real.'); return; }
     btn.disabled=true; btn.innerHTML='<span class="spinner"></span> Cifrando…';
     try{
-      const built = await buildPayload({ secretText, realPass, hiddenEnabled, decoyPass, decoyText, tier: selectedTier });
-      const rawBytes = rsEncodePayloadToRaw(built.payload, built.grid);
+      const highEcc = selectedTier === 'pro' && highEccEnabled;
+      const built = await buildPayload({ secretText, realPass, hiddenEnabled, decoyPass, decoyText, tier: selectedTier, highEcc });
+      const rawBytes = rsEncodePayloadToRaw(built.payload, built.grid, built.parity);
       const indices = payloadToColorIndices(rawBytes);
       const canvas = document.getElementById('generateCanvas');
       drawCubeNet(canvas, indices, built.grid);
@@ -471,12 +496,24 @@ function renderPerfil(){
   document.getElementById('profileOrderCount').textContent = appState.myOrders.length;
   const themeToggle = document.getElementById('themeToggle');
   if (themeToggle) themeToggle.checked = appState.theme === 'dark';
-  // Botón del panel de administración: solo para correos admin.
+  // Botón del panel de administración: pista visual basada en el flag is_admin
+  // que firma el backend (con fallback al correo). El acceso real lo valida el
+  // servidor: las rutas /api/admin/* responden 403 a cualquier no-admin.
   const adminBtn = document.getElementById('openAdminBtn');
   if (adminBtn){
     const user = getCurrentUser();
-    adminBtn.style.display = (user && isAdminEmail(user.email)) ? 'block' : 'none';
+    const isAdmin = !!user && (user.isAdmin === true || isAdminEmail(user.email));
+    adminBtn.style.display = isAdmin ? 'flex' : 'none';
   }
+  // Aviso de correo sin verificar (solo con sesión iniciada y email no verificado).
+  const verifyNotice = document.getElementById('emailVerifyNotice');
+  if (verifyNotice){
+    const user = getCurrentUser();
+    verifyNotice.style.display = (user && user.emailVerified === false) ? 'flex' : 'none';
+  }
+  // La sección de 2FA solo tiene sentido con sesión iniciada.
+  const twoFATrigger = document.getElementById('twoFATrigger');
+  if (twoFATrigger) twoFATrigger.style.display = getCurrentUser() ? 'flex' : 'none';
   const cubesList = document.getElementById('myCubesList');
   cubesList.innerHTML = appState.myCubes.length ? '' : '<div class="hint">Aún no has creado ningún cubo.</div>';
   appState.myCubes.slice().reverse().forEach(c => {
@@ -497,8 +534,9 @@ function initPerfil(){
   document.getElementById('openAdminBtn').addEventListener('click', () => openAdmin());
   document.getElementById('themeToggle').addEventListener('change', e => setTheme(e.target.checked ? 'dark' : 'light'));
 
-  document.getElementById('changePassTrigger').addEventListener('click', () => {
+  document.getElementById('changePassTrigger').addEventListener('click', (e) => {
     document.getElementById('changePassBody').classList.toggle('show');
+    e.currentTarget.classList.toggle('open');
   });
   document.getElementById('changePassBtn').addEventListener('click', async () => {
     const current = document.getElementById('currentPass').value;
@@ -510,14 +548,112 @@ function initPerfil(){
       await changePassword(current, next);
       document.getElementById('currentPass').value=''; document.getElementById('newPass').value='';
       document.getElementById('changePassBody').classList.remove('show');
+      document.getElementById('changePassTrigger').classList.remove('open');
       renderPerfil();
     } catch(e){ showError(e.message); }
     finally { btn.disabled=false; btn.textContent=prev; }
   });
 
+  // Reenviar correo de verificación.
+  const resendBtn = document.getElementById('resendVerifyBtn');
+  if (resendBtn) resendBtn.addEventListener('click', async () => {
+    resendBtn.disabled = true; const prev = resendBtn.textContent;
+    resendBtn.innerHTML = '<span class="spinner"></span> Enviando…';
+    try{ await authApi.resendVerification(); showToast('Correo de verificación enviado. Revisa tu bandeja.'); }
+    catch(e){ showError(e.message || 'No se pudo enviar el correo.'); }
+    finally{ resendBtn.disabled = false; resendBtn.textContent = prev; }
+  });
+
+  // ---- 2FA ----
+  initTwoFactorUI();
+
   document.getElementById('logoutBtn').addEventListener('click', async () => {
     await logout();
     renderPerfil();
+  });
+}
+
+/* ---- Verificación en dos pasos (perfil) ---- */
+function initTwoFactorUI(){
+  const trigger = document.getElementById('twoFATrigger');
+  if (!trigger) return;
+  const body = document.getElementById('twoFABody');
+  const statusEl = document.getElementById('twoFAStatus');
+  const setupEl = document.getElementById('twoFASetup');
+  const startBtn = document.getElementById('twoFAStartBtn');
+  const recoveryEl = document.getElementById('twoFARecovery');
+  const disableEl = document.getElementById('twoFADisable');
+
+  async function refresh(){
+    setupEl.style.display = 'none';
+    recoveryEl.style.display = 'none';
+    disableEl.style.display = 'none';
+    startBtn.style.display = 'none';
+    statusEl.textContent = 'Cargando…';
+    try{
+      const st = await twoFactorApi.status();
+      if (st.enabled){
+        statusEl.textContent = `Activado ✓ · ${st.recoveryCodesLeft} códigos de recuperación sin usar.`;
+        disableEl.style.display = 'block';
+      } else {
+        statusEl.textContent = 'Añade una capa extra de seguridad con una app autenticadora (Google Authenticator, Authy…).';
+        startBtn.style.display = 'block';
+      }
+    } catch(e){ statusEl.textContent = e.message || 'No se pudo cargar el estado del 2FA.'; }
+  }
+
+  trigger.addEventListener('click', () => {
+    const open = body.classList.toggle('show');
+    trigger.classList.toggle('open', open);
+    if (open) refresh();
+  });
+
+  startBtn.addEventListener('click', async () => {
+    startBtn.disabled = true; const prev = startBtn.textContent;
+    startBtn.innerHTML = '<span class="spinner"></span> Generando…';
+    try{
+      const data = await twoFactorApi.setup();
+      document.getElementById('twoFAQr').src = data.qrDataUrl;
+      document.getElementById('twoFASecret').textContent = data.secret;
+      setupEl.style.display = 'block';
+      startBtn.style.display = 'none';
+      statusEl.textContent = 'Escanea el QR y escribe el código que muestra tu app.';
+    } catch(e){ showError(e.message || 'No se pudo iniciar el 2FA.'); }
+    finally{ startBtn.disabled = false; startBtn.textContent = prev; }
+  });
+
+  document.getElementById('twoFAEnableBtn').addEventListener('click', async () => {
+    const code = document.getElementById('twoFACode').value.trim();
+    if (!code){ showError('Escribe el código de 6 dígitos.'); return; }
+    const btn = document.getElementById('twoFAEnableBtn');
+    btn.disabled = true; const prev = btn.textContent; btn.innerHTML = '<span class="spinner"></span> Activando…';
+    try{
+      const { recoveryCodes } = await twoFactorApi.enable(code);
+      setupEl.style.display = 'none';
+      document.getElementById('twoFACode').value = '';
+      recoveryEl.style.display = 'block';
+      recoveryEl.innerHTML = `
+        <div class="hint" style="margin-bottom:6px;">✅ 2FA activado. Guarda estos códigos de recuperación en un lugar seguro (cada uno sirve una sola vez):</div>
+        <div class="card" style="padding:12px 16px;font-family:monospace;line-height:1.9;">${recoveryCodes.map(c => `<div>${c}</div>`).join('')}</div>`;
+      showToast('Verificación en dos pasos activada.');
+      // Refresca la sesión para reflejar twoFactorEnabled.
+      try{ await authApi.me(); }catch(_){ /* no crítico */ }
+    } catch(e){ showError(e.message || 'Código incorrecto.'); }
+    finally{ btn.disabled = false; btn.textContent = prev; }
+  });
+
+  document.getElementById('twoFADisableBtn').addEventListener('click', async () => {
+    const pass = document.getElementById('twoFADisablePass').value;
+    if (!pass){ showError('Confirma tu contraseña.'); return; }
+    const btn = document.getElementById('twoFADisableBtn');
+    btn.disabled = true; const prev = btn.textContent; btn.innerHTML = '<span class="spinner"></span> Desactivando…';
+    try{
+      await twoFactorApi.disable(pass);
+      document.getElementById('twoFADisablePass').value = '';
+      showToast('Verificación en dos pasos desactivada.');
+      await refresh();
+    } catch(e){ showError(e.message || 'No se pudo desactivar el 2FA.'); }
+    finally{ btn.disabled = false; btn.textContent = prev; }
   });
 }
 

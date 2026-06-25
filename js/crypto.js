@@ -11,6 +11,11 @@ export const TIERS = { mini:{grid:24,label:'Mini'}, estandar:{grid:40,label:'Est
 export const HEADER_SIZE = 20;
 export const MAGIC = new Uint8Array([0x43,0x43,0x31]);
 export const RS_K = 32, RS_PARITY = 8, RS_N = 40;
+// Variante opcional de "alta corrección" para el nivel Pro: dobla la paridad
+// (8→16 de 40) a cambio de capacidad de secreto (32→24 de 40 por bloque).
+// RS_N (tamaño físico de bloque) no cambia, así que el número de bloques por
+// grid tampoco cambia: solo se reparten distinto entre datos y paridad.
+export const RS_PARITY_HIGH = 16;
 
 /* ---- Versión de KDF, empacada en bits libres del byte de flags (offset 3) ----
    Bit 0 = volumen oculto (igual que siempre). Bit 1 = KDF usado para las claves AES.
@@ -22,10 +27,11 @@ export const KDF_PBKDF2 = 'pbkdf2';
 export const KDF_ARGON2ID = 'argon2id';
 
 export function capacityBytesForGrid(grid){ return Math.floor((grid*grid*6*3)/8); }
-export function effectiveCapacityForGrid(grid){
+export function effectiveCapacityForGrid(grid, parity = RS_PARITY){
   const raw = capacityBytesForGrid(grid);
+  const k = RS_N - parity;
   const numBlocks = Math.floor(raw / RS_N);
-  return { raw, numBlocks, usable: numBlocks*RS_K };
+  return { raw, numBlocks, usable: numBlocks*k, k, parity };
 }
 export function slotPlaintextLenForCapacity(usableCapacity){
   const overheadPerSlot = 12+2+16;
@@ -98,7 +104,8 @@ export async function hmacOffset(passphrase, salt, rangeSize){
 export async function buildPayload(opts){
   const tierInfo = TIERS[opts.tier];
   if (!tierInfo) throw new Error('Nivel de capacidad inválido.');
-  const usableCapacity = effectiveCapacityForGrid(tierInfo.grid).usable;
+  const parity = (opts.tier === 'pro' && opts.highEcc) ? RS_PARITY_HIGH : RS_PARITY;
+  const usableCapacity = effectiveCapacityForGrid(tierInfo.grid, parity).usable;
   const slotLen = slotPlaintextLenForCapacity(usableCapacity);
   const salt = randomBytes(16);
   const payload = new Uint8Array(usableCapacity);
@@ -138,7 +145,7 @@ export async function buildPayload(opts){
     payload[hiddenOffset+13]=hiddenEnc.ciphertext.length&0xff;
     payload.set(hiddenEnc.ciphertext, hiddenOffset+14);
   }
-  return { payload, usableCapacity, slotLen, grid: tierInfo.grid, kdf: useArgon2 ? KDF_ARGON2ID : KDF_PBKDF2 };
+  return { payload, usableCapacity, slotLen, grid: tierInfo.grid, parity, kdf: useArgon2 ? KDF_ARGON2ID : KDF_PBKDF2 };
 }
 export async function tryDecryptPayload(payload, passphrase){
   const magicOk = payload[0]===MAGIC[0] && payload[1]===MAGIC[1] && payload[2]===MAGIC[2];
@@ -282,28 +289,28 @@ export function rsDecodeBlock(received, k, parity){
   }
   return { data: received.slice(0,k), corrected:-1, success:false };
 }
-export function rsEncodePayloadToRaw(payload, grid){
-  const {raw,numBlocks,usable} = effectiveCapacityForGrid(grid);
+export function rsEncodePayloadToRaw(payload, grid, parity = RS_PARITY){
+  const {raw,numBlocks,usable,k} = effectiveCapacityForGrid(grid, parity);
   if (payload.length !== usable) throw new Error('Tamaño de payload inesperado para este grid.');
   const out = new Uint8Array(raw);
   out.set(randomBytes(raw), 0);
   for (let i=0;i<numBlocks;i++){
-    const block = payload.slice(i*RS_K, (i+1)*RS_K);
-    out.set(rsEncodeBlock(block, RS_PARITY), i*RS_N);
+    const block = payload.slice(i*k, (i+1)*k);
+    out.set(rsEncodeBlock(block, parity), i*RS_N);
   }
   return out;
 }
-export function rsDecodeRawToPayload(raw, grid){
-  const {raw:rawLen, numBlocks, usable} = effectiveCapacityForGrid(grid);
+export function rsDecodeRawToPayload(raw, grid, parity = RS_PARITY){
+  const {raw:rawLen, numBlocks, usable, k} = effectiveCapacityForGrid(grid, parity);
   if (raw.length !== rawLen) throw new Error('La imagen no corresponde a esta capacidad seleccionada.');
   const payload = new Uint8Array(usable);
   let totalCorrected = 0;
   for (let i=0;i<numBlocks;i++){
     const block = raw.slice(i*RS_N, (i+1)*RS_N);
-    const res = rsDecodeBlock(block, RS_K, RS_PARITY);
+    const res = rsDecodeBlock(block, k, parity);
     if (!res.success) throw new Error(`El cubo está demasiado dañado para recuperarse (bloque ${i+1} de ${numBlocks} con más errores de los corregibles).`);
     if (res.corrected>0) totalCorrected += res.corrected;
-    payload.set(res.data, i*RS_K);
+    payload.set(res.data, i*k);
   }
   return { payload, totalCorrected };
 }

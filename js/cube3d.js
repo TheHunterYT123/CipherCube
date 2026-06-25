@@ -14,11 +14,25 @@
    (colorIndicesToPayload → rsDecodeRawToPayload → tryDecryptPayload).
    ========================================================= */
 import {
-  PALETTE, FACE_ORDER, FACE_LABELS, SHARE_GRID,
+  PALETTE, FACE_ORDER, FACE_LABELS, SHARE_GRID, TIERS,
   capacityBytesForGrid, colorIndicesToPayload, rsDecodeRawToPayload,
   nearestPaletteIndex, computeHomography, applyHomography,
-  rsDecodeBlock, effectiveCapacityForGrid, RS_N, RS_K, RS_PARITY,
+  rsDecodeBlock, effectiveCapacityForGrid, RS_N, RS_K, RS_PARITY, RS_PARITY_HIGH,
 } from './crypto.js';
+
+/** Variantes de paridad a probar para un grid dado al descifrar (no se sabe de
+ * antemano si el cubo se generó con "alta corrección"): el nivel Pro admite la
+ * variante normal y la de alta corrección; el resto solo la normal.
+ * IMPORTANTE: se prueba primero la paridad ALTA. Los generadores Reed-Solomon
+ * usados aquí son anidados (el de grado 16 incluye como factor al de grado 8),
+ * así que un bloque codificado con paridad 16 también pasa, por construcción,
+ * la verificación de paridad 8 — probar paridad 8 primero interpretaría mal
+ * (en silencio, sin error) cualquier cubo de alta corrección. Un bloque
+ * genuino de paridad 8 no satisface la verificación de paridad 16 por
+ * casualidad, así que el orden inverso no tiene ese problema. */
+function parityCandidatesForGrid(grid){
+  return grid === TIERS.pro.grid ? [RS_PARITY_HIGH, RS_PARITY] : [RS_PARITY];
+}
 
 /* ---- Geometría normalizada de la baldosa (0..1 en ambos ejes) ---- */
 const F = 0.07;            // grosor del marco negro exterior
@@ -335,6 +349,13 @@ export function refineTileCorners(data, w, h, corners, rotation){
   // Cordura: el área afinada debe parecerse a la del guide (no colapsada ni gigante).
   const refSpan = Math.hypot(refined[1][0] - refined[0][0], refined[1][1] - refined[0][1]);
   if (refSpan < tileSpan * 0.5 || refSpan > tileSpan * 1.6) return corners;
+  // Zona muerta: si la corrección es minúscula (cara ya bien encuadrada), el ruido
+  // propio de la detección de bordes empeora la lectura más de lo que ayuda
+  // (medido: en grid Pro empeoraba la cara incluso con encuadre perfecto). Solo
+  // vale la pena corregir cuando el desalineamiento real es de varios píxeles.
+  let maxShift = 0;
+  for (let i = 0; i < 4; i++) maxShift = Math.max(maxShift, Math.hypot(refined[i][0] - corners[i][0], refined[i][1] - corners[i][1]));
+  if (maxShift < tileSpan * 0.012) return corners;
   return refined;
 }
 
@@ -398,7 +419,7 @@ export function sampleFaceCells(canon, grid){
   const { data, size } = canon;
   const dataSpan = 1 - 2 * DI;
   const cellN = dataSpan / grid;
-  const half = cellN * 0.3;
+  const half = cellN * 0.22;
   const white = canonWhiteRef(data, size);
   const black = canonBlackRef(data, size);
   // Solo calibrar si las referencias son sanas: blanco claro y separado del negro.
@@ -429,12 +450,19 @@ export function sampleFaceCells(canon, grid){
 export function decodeCanonicalFaces(canonByFace, tiers){
   for (const tierKey of Object.keys(tiers)){
     const grid = tiers[tierKey].grid;
+    let facesByIndex;
     try{
-      const facesByIndex = {};
+      facesByIndex = {};
       for (let f = 0; f < FACE_COUNT; f++) facesByIndex[f] = sampleFaceCells(canonByFace[f], grid);
-      const { payload, totalCorrected } = facesToPayload(facesByIndex, grid);
-      return { payload, totalCorrected, grid, tier: tierKey };
-    } catch(_){ /* prueba la siguiente capacidad */ }
+    } catch(_){ continue; }
+    // El muestreo de píxeles no depende de la paridad usada al crear el cubo, así
+    // que se reutiliza facesByIndex y solo se reintenta el reparto datos/paridad.
+    for (const parity of parityCandidatesForGrid(grid)){
+      try{
+        const { payload, totalCorrected } = facesToPayload(facesByIndex, grid, parity);
+        return { payload, totalCorrected, grid, tier: tierKey, parity };
+      } catch(_){ /* prueba la siguiente paridad o capacidad */ }
+    }
   }
   throw new Error('No se pudo reconstruir el cubo con ninguna capacidad. Reescanea las caras con buena luz.');
 }
@@ -464,19 +492,21 @@ export function diagnoseCanonicalFaces(canonByFace, tiers){
       const indices = assembleFaces(facesByIndex, grid);
       raw = colorIndicesToPayload(indices, capacityBytesForGrid(grid));
     } catch(_){ continue; }
-    const { numBlocks } = effectiveCapacityForGrid(grid);
-    const perFaceFailed = new Array(FACE_COUNT).fill(0);
-    const perFaceTotal = new Array(FACE_COUNT).fill(0);
-    let failedBlocks = 0;
-    for (let i = 0; i < numBlocks; i++){
-      const block = raw.slice(i * RS_N, (i + 1) * RS_N);
-      const res = rsDecodeBlock(block, RS_K, RS_PARITY);
-      const face = blockFaceIndex(i, grid);
-      perFaceTotal[face]++;
-      if (!res.success){ failedBlocks++; perFaceFailed[face]++; }
+    for (const parity of parityCandidatesForGrid(grid)){
+      const { numBlocks, k } = effectiveCapacityForGrid(grid, parity);
+      const perFaceFailed = new Array(FACE_COUNT).fill(0);
+      const perFaceTotal = new Array(FACE_COUNT).fill(0);
+      let failedBlocks = 0;
+      for (let i = 0; i < numBlocks; i++){
+        const block = raw.slice(i * RS_N, (i + 1) * RS_N);
+        const res = rsDecodeBlock(block, k, parity);
+        const face = blockFaceIndex(i, grid);
+        perFaceTotal[face]++;
+        if (!res.success){ failedBlocks++; perFaceFailed[face]++; }
+      }
+      const report = { tier: tierKey, grid, parity, numBlocks, failedBlocks, perFaceFailed, perFaceTotal };
+      if (!best || report.failedBlocks < best.failedBlocks) best = report;
     }
-    const report = { tier: tierKey, grid, numBlocks, failedBlocks, perFaceFailed, perFaceTotal };
-    if (!best || report.failedBlocks < best.failedBlocks) best = report;
   }
   return best;
 }
@@ -509,7 +539,10 @@ export function decodeSheetImage(img, grid){
     const canon = warpToCanonical(full.data, L.width, L.height, corners, det.rotation);
     facesByIndex[det.faceIndex] = sampleFaceCells(canon, grid);
   }
-  return facesToPayload(facesByIndex, grid); // { payload, totalCorrected }
+  for (const parity of parityCandidatesForGrid(grid)){
+    try{ return facesToPayload(facesByIndex, grid, parity); } catch(_){ /* prueba la siguiente paridad */ }
+  }
+  throw new Error('No se pudo reconstruir el cubo con ninguna capacidad. Revisa la imagen.');
 }
 
 /** Reensambla las 6 caras (objeto {faceIndex: cells}) en el array completo. */
@@ -525,10 +558,10 @@ export function assembleFaces(facesByIndex, grid){
 }
 
 /** Convierte las 6 caras capturadas en payload, reutilizando el pipeline congelado. */
-export function facesToPayload(facesByIndex, grid){
+export function facesToPayload(facesByIndex, grid, parity = RS_PARITY){
   const indices = assembleFaces(facesByIndex, grid);
   const rawBytes = colorIndicesToPayload(indices, capacityBytesForGrid(grid));
-  return rsDecodeRawToPayload(rawBytes, grid); // { payload, totalCorrected }
+  return rsDecodeRawToPayload(rawBytes, grid, parity); // { payload, totalCorrected }
 }
 
 /* ---- Partes Shamir como cubos escaneables ----
