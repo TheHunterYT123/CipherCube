@@ -349,13 +349,14 @@ export function refineTileCorners(data, w, h, corners, rotation){
   // Cordura: el área afinada debe parecerse a la del guide (no colapsada ni gigante).
   const refSpan = Math.hypot(refined[1][0] - refined[0][0], refined[1][1] - refined[0][1]);
   if (refSpan < tileSpan * 0.5 || refSpan > tileSpan * 1.6) return corners;
-  // Zona muerta: si la corrección es minúscula (cara ya bien encuadrada), el ruido
-  // propio de la detección de bordes empeora la lectura más de lo que ayuda
-  // (medido: en grid Pro empeoraba la cara incluso con encuadre perfecto). Solo
-  // vale la pena corregir cuando el desalineamiento real es de varios píxeles.
+  // Zona muerta estrecha: salta solo correcciones a nivel de ruido (~0.8px de la
+  // detección de bordes) en caras ya bien encuadradas, pero permite corregir
+  // perspectiva/desalineación real (varios px). Ajustada al muestreo de 720px,
+  // donde el afinado es lo bastante preciso para que perspectivas leves del grid
+  // Pro (las que más sufren) se corrijan en vez de bloquearse.
   let maxShift = 0;
   for (let i = 0; i < 4; i++) maxShift = Math.max(maxShift, Math.hypot(refined[i][0] - corners[i][0], refined[i][1] - corners[i][1]));
-  if (maxShift < tileSpan * 0.012) return corners;
+  if (maxShift < tileSpan * 0.003) return corners;
   return refined;
 }
 
