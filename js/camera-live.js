@@ -16,7 +16,7 @@
 import {
   FACE_LABELS, FACE_ORDER, TIERS, tryDecryptPayload, parseDecodedPayload, dataUrlForFileEntry,
 } from './crypto.js';
-import { detectTile, warpToCanonical, refineTileCorners, decodeCanonicalFaces, diagnoseCanonicalFaces, dataSampleBoxes, FACE_COUNT } from './cube3d.js';
+import { detectTile, warpToCanonical, refineTileCornersDebug, decodeCanonicalFaces, diagnoseCanonicalFaces, dataSampleBoxes, FACE_COUNT } from './cube3d.js';
 import { showToast, showError } from './ui.js';
 
 const SAMPLE_SIZE = 720;        // lado del lienzo cuadrado de muestreo (más px/celda en Pro)
@@ -57,6 +57,7 @@ export function createLiveScanner(config){
   let lastDetect = 0;
   let stableFace = -1, stableCount = 0;
   let captured = {};
+  let refineDebug = {}; // SOLO DIAGNÓSTICO: por qué el afinado de esquinas aceptó/descartó cada cara
 
   function setStatus(text){ if (els.status) els.status.textContent = text; }
 
@@ -127,10 +128,11 @@ export function createLiveScanner(config){
     // Afinar las esquinas reales del marco antes de enderezar: la detección es
     // tolerante a desalineación pero la rejilla de datos no, así que sin esto la
     // lectura sale corrida aunque la cara se haya "detectado bien".
-    const corners = refineTileCorners(img.data, SAMPLE_SIZE, SAMPLE_SIZE, guideCorners(), detection.rotation);
-    const canon = warpToCanonical(img.data, SAMPLE_SIZE, SAMPLE_SIZE, corners, detection.rotation);
+    const refineInfo = refineTileCornersDebug(img.data, SAMPLE_SIZE, SAMPLE_SIZE, guideCorners(), detection.rotation);
+    const canon = warpToCanonical(img.data, SAMPLE_SIZE, SAMPLE_SIZE, refineInfo.corners, detection.rotation);
     const isNew = !captured[detection.faceIndex];
     captured[detection.faceIndex] = canon;
+    refineDebug[detection.faceIndex] = refineInfo;
     stableFace = -1; stableCount = 0;
     flash();
     playCaptureAnimation();
@@ -228,6 +230,7 @@ export function createLiveScanner(config){
 
   function resetScan(){
     captured = {};
+    refineDebug = {};
     stableFace = -1; stableCount = 0; paused = false;
     if (els.output) els.output.classList.add('hidden');
     if (els.pass) els.pass.value = '';
@@ -242,7 +245,7 @@ export function createLiveScanner(config){
     const btn = els.actionBtn;
     btn.disabled = true; btn.innerHTML = `<span class="spinner"></span> ${config.busyLabel || 'Procesando…'}`;
     try{
-      await config.onAction({ ...captured }, { pass });
+      await config.onAction({ ...captured }, { pass, refineDebug: { ...refineDebug } });
       if (config.resetAfterAction) resetScan();
     } catch(e){
       showError(e.message);
@@ -328,9 +331,24 @@ function renderCubeReveal(rawText, totalCorrected){
    el problema es de ALINEACIÓN (las cajas no caen centradas en cada cuadro de
    color), de COLOR (caen bien pero los colores salen apagados/cambiados) o de
    captura (la cara está torcida/recortada). Devuelve un dataURL PNG. */
-function buildDiagnosticDataURL(canonByFace, grid){
+function refineDebugLabel(info){
+  if (!info) return '(sin datos de afinado)';
+  if (info.refined) return `afinado: SÍ (movió ${info.maxShift}px, tamaño ${info.spanRatio}×)`;
+  const reasons = {
+    'ya-alineado': 'ya estaba alineado',
+    'pocos-bordes': `no encontró suficiente borde del marco (${JSON.stringify(info.counts)}, umbral ${info.thr})`,
+    'ajuste-de-recta-fallo': 'el ajuste de recta del borde falló',
+    'sin-interseccion': 'las rectas de borde no se cruzaron',
+    'esquina-fuera-de-rango': 'esquina afinada fuera de rango',
+    'tamano-fuera-de-rango': `tamaño afinado fuera de rango (${info.spanRatio}× la guía)`,
+    'sin-span': 'sin tamaño de guía',
+  };
+  return `afinado: NO — ${reasons[info.reason] || info.reason} → usa la guía sin corregir`;
+}
+
+function buildDiagnosticDataURL(canonByFace, grid, refineDebug){
   const cols = 3, rows = Math.ceil(FACE_COUNT / cols);
-  const thumb = 320, pad = 10, labelH = 20;
+  const thumb = 320, pad = 10, labelH = 34;
   const cv = document.createElement('canvas');
   cv.width = cols * thumb + (cols + 1) * pad;
   cv.height = rows * (thumb + labelH) + (rows + 1) * pad;
@@ -345,6 +363,8 @@ function buildDiagnosticDataURL(canonByFace, grid){
     const canon = canonByFace[f];
     ctx.fillStyle = '#fff';
     ctx.fillText(`Cara ${f + 1} — ${FACE_LABELS[FACE_ORDER[f]]}` + (canon ? '' : '  (sin capturar)'), x, y + 3);
+    ctx.fillStyle = refineDebug && refineDebug[f] && refineDebug[f].refined ? '#7fffa0' : '#ff8c8c';
+    ctx.fillText(refineDebugLabel(refineDebug && refineDebug[f]), x, y + 18);
     const oy = y + labelH;
     if (!canon) continue;
     tmp.width = canon.size; tmp.height = canon.size;
@@ -358,7 +378,7 @@ function buildDiagnosticDataURL(canonByFace, grid){
 
 /* Panel de diagnóstico cuando el descifrado falla por lectura de color: dice qué
    caras tienen colores ilegibles, en el panel persistente (no en un toast fugaz). */
-function renderCubeDiagnostic(report, canonByFace){
+function renderCubeDiagnostic(report, canonByFace, refineDebug){
   const reveal = document.getElementById('liveDecodeReveal');
   reveal.innerHTML = '';
   const title = document.createElement('div');
@@ -399,7 +419,7 @@ function renderCubeDiagnostic(report, canonByFace){
     btn.textContent = 'Guardar diagnóstico (imagen)';
     btn.onclick = () => {
       try{
-        const url = buildDiagnosticDataURL(canonByFace, TIERS[report.tier].grid);
+        const url = buildDiagnosticDataURL(canonByFace, TIERS[report.tier].grid, refineDebug);
         const a = document.createElement('a');
         a.href = url; a.download = 'ciphercube-diagnostico.png';
         document.body.appendChild(a); a.click(); a.remove();
@@ -428,7 +448,7 @@ const cubeScanner = createLiveScanner({
   labelComplete: 'Descifrar',
   labelIncomplete: n => `Descifrar (faltan ${n})`,
   resetAfterAction: false,
-  onAction: async (canonByFace, { pass }) => {
+  onAction: async (canonByFace, { pass, refineDebug }) => {
     let payload, totalCorrected;
     try{
       ({ payload, totalCorrected } = decodeCanonicalFaces(canonByFace, TIERS));
@@ -437,7 +457,7 @@ const cubeScanner = createLiveScanner({
       // relanza un error corto para el toast.
       const report = diagnoseCanonicalFaces(canonByFace, TIERS);
       if (report){
-        renderCubeDiagnostic(report, canonByFace);
+        renderCubeDiagnostic(report, canonByFace, refineDebug);
         document.getElementById('liveDecodeOutput').classList.remove('hidden');
         throw new Error('No se pudo descifrar. Mira el detalle por cara abajo.');
       }

@@ -233,19 +233,30 @@ export function readFaceTile(data, w, h, corners, grid){
 
 /** Detecta solo orientación e identidad (sin muestrear toda la rejilla). Barato
  * para correr cada frame de la cámara. Devuelve {ok, faceIndex, rotation}. */
+// Factores de "achicado": a mano, casi nadie llena el recuadro guía exacto —
+// la cara real suele quedar algo más chica y centrada dentro de él. Antes
+// detectTile asumía cara=guide al pie de la letra, así que un encuadre normal
+// (90-95%) hacía que los puntos de revisión del marco cayeran fuera de la
+// cara real (en el papel blanco) y la detección fallaba por completo —
+// nunca llegaba a refineTileCorners, que sí tolera bien ese rango.
+const DETECT_SHRINKS = [1, 0.97, 0.94, 0.91, 0.88, 0.85];
+
 export function detectTile(data, w, h, corners){
   const sample = makeSampler(data, w, h, corners);
   const MARK = 0.012; // radio normalizado para promediar marcas (estabiliza con cámara)
+  const at = (nx, ny, s) => (s === 1 ? [nx, ny] : [0.5 + (nx - 0.5) * s, 0.5 + (ny - 0.5) * s]);
   for (let k = 0; k < 4; k++){
-    const pattern = FINDER_CENTERS.map(([cx, cy]) => { const [rx, ry] = rotPoint(cx, cy, k); return isDark(sample.avg(rx, ry, MARK)); });
-    if (!pattern.every((d, i) => d === CANONICAL_DARK[i])) continue;
-    const frameDark = [[0.5, F / 2], [0.5, 1 - F / 2], [F / 2, 0.5], [1 - F / 2, 0.5]]
-      .every(([fx, fy]) => { const [rx, ry] = rotPoint(fx, fy, k); return isDark(sample.avg(rx, ry, MARK)); });
-    if (!frameDark) continue;
-    let faceIndex = 0;
-    for (let b = 0; b < 3; b++){ const [rx, ry] = rotPoint(ID_BIT_X[b], ID_BIT_Y, k); faceIndex = (faceIndex << 1) | (isDark(sample.avg(rx, ry, MARK)) ? 1 : 0); }
-    if (faceIndex < 0 || faceIndex >= FACE_COUNT) continue;
-    return { ok: true, faceIndex, rotation: k };
+    for (const s of DETECT_SHRINKS){
+      const pattern = FINDER_CENTERS.map(([cx, cy]) => { const [px, py] = at(cx, cy, s); const [rx, ry] = rotPoint(px, py, k); return isDark(sample.avg(rx, ry, MARK)); });
+      if (!pattern.every((d, i) => d === CANONICAL_DARK[i])) continue;
+      const frameDark = [[0.5, F / 2], [0.5, 1 - F / 2], [F / 2, 0.5], [1 - F / 2, 0.5]]
+        .every(([fx, fy]) => { const [px, py] = at(fx, fy, s); const [rx, ry] = rotPoint(px, py, k); return isDark(sample.avg(rx, ry, MARK)); });
+      if (!frameDark) continue;
+      let faceIndex = 0;
+      for (let b = 0; b < 3; b++){ const [px, py] = at(ID_BIT_X[b], ID_BIT_Y, s); const [rx, ry] = rotPoint(px, py, k); faceIndex = (faceIndex << 1) | (isDark(sample.avg(rx, ry, MARK)) ? 1 : 0); }
+      if (faceIndex < 0 || faceIndex >= FACE_COUNT) continue;
+      return { ok: true, faceIndex, rotation: k };
+    }
   }
   return { ok: false };
 }
@@ -311,12 +322,15 @@ function intersect(vert, horz){
 }
 
 /** Afina las 4 esquinas de la baldosa por detección de bordes del marco. Devuelve
- * las esquinas originales si algo no cuadra (nunca empeora la captura). */
-export function refineTileCorners(data, w, h, corners, rotation){
+ * las esquinas originales si algo no cuadra (nunca empeora la captura).
+ * SOLO DIAGNÓSTICO: incluye en el resultado por qué se aceptó o se descartó el
+ * afinado (`reason`), para poder ver en una foto real si esta etapa está
+ * funcionando o cayendo siempre al fallback (que es mucho menos preciso). */
+export function refineTileCornersDebug(data, w, h, corners, rotation){
   const square = [[0, 0], [1, 0], [1, 1], [0, 1]];
   const H = computeHomography(square, corners);
   const tileSpan = Math.hypot(corners[1][0] - corners[0][0], corners[1][1] - corners[0][1]);
-  if (!tileSpan) return corners;
+  if (!tileSpan) return { corners, refined: false, reason: 'sin-span' };
   // Umbral oscuro relativo a la exposición (mitad del blanco de la banda).
   const whiteSamples = [[F + B / 2, 0.5], [1 - F - B / 2, 0.5]].map(([nx, ny]) => {
     const [rx, ry] = rotPoint(nx, ny, rotation);
@@ -341,15 +355,25 @@ export function refineTileCorners(data, w, h, corners, rotation){
     const pB = scanFrameEdge(data, w, h, x, yB0 + margin, 0, -1, steps, thr, minRun);
     if (pL) leftPts.push(pL); if (pR) rightPts.push(pR); if (pT) topPts.push(pT); if (pB) botPts.push(pB);
   }
-  if (leftPts.length < 3 || rightPts.length < 3 || topPts.length < 3 || botPts.length < 3) return corners;
+  const counts = { left: leftPts.length, right: rightPts.length, top: topPts.length, bot: botPts.length };
+  if (leftPts.length < 3 || rightPts.length < 3 || topPts.length < 3 || botPts.length < 3){
+    return { corners, refined: false, reason: 'pocos-bordes', counts, thr: Math.round(thr) };
+  }
   const left = fitLine(leftPts, 'xy'), right = fitLine(rightPts, 'xy');
   const top = fitLine(topPts, 'yx'), bot = fitLine(botPts, 'yx');
-  if (!left || !right || !top || !bot) return corners;
+  if (!left || !right || !top || !bot) return { corners, refined: false, reason: 'ajuste-de-recta-fallo', counts };
   const refined = [intersect(left, top), intersect(right, top), intersect(right, bot), intersect(left, bot)];
-  for (const c of refined){ if (!c) return corners; const [x, y] = c; if (x < -w || x > 2 * w || y < -h || y > 2 * h) return corners; }
+  for (const c of refined){
+    if (!c) return { corners, refined: false, reason: 'sin-interseccion', counts };
+    const [x, y] = c;
+    if (x < -w || x > 2 * w || y < -h || y > 2 * h) return { corners, refined: false, reason: 'esquina-fuera-de-rango', counts };
+  }
   // Cordura: el área afinada debe parecerse a la del guide (no colapsada ni gigante).
   const refSpan = Math.hypot(refined[1][0] - refined[0][0], refined[1][1] - refined[0][1]);
-  if (refSpan < tileSpan * 0.5 || refSpan > tileSpan * 1.6) return corners;
+  const spanRatio = refSpan / tileSpan;
+  if (refSpan < tileSpan * 0.5 || refSpan > tileSpan * 1.6){
+    return { corners, refined: false, reason: 'tamano-fuera-de-rango', counts, spanRatio: +spanRatio.toFixed(2) };
+  }
   // Zona muerta estrecha: salta solo correcciones a nivel de ruido (~0.8px de la
   // detección de bordes) en caras ya bien encuadradas, pero permite corregir
   // perspectiva/desalineación real (varios px). Ajustada al muestreo de 720px,
@@ -357,8 +381,16 @@ export function refineTileCorners(data, w, h, corners, rotation){
   // Pro (las que más sufren) se corrijan en vez de bloquearse.
   let maxShift = 0;
   for (let i = 0; i < 4; i++) maxShift = Math.max(maxShift, Math.hypot(refined[i][0] - corners[i][0], refined[i][1] - corners[i][1]));
-  if (maxShift < tileSpan * 0.003) return corners;
-  return refined;
+  if (maxShift < tileSpan * 0.003){
+    return { corners, refined: false, reason: 'ya-alineado', counts, maxShift: Math.round(maxShift) };
+  }
+  return { corners: refined, refined: true, reason: 'ok', counts, maxShift: Math.round(maxShift), spanRatio: +spanRatio.toFixed(2) };
+}
+
+/** Afina las 4 esquinas de la baldosa por detección de bordes del marco. Devuelve
+ * las esquinas originales si algo no cuadra (nunca empeora la captura). */
+export function refineTileCorners(data, w, h, corners, rotation){
+  return refineTileCornersDebug(data, w, h, corners, rotation).corners;
 }
 
 /** Promedia el RGB sobre una caja centrada (en coordenadas normalizadas) del lienzo canónico. */
