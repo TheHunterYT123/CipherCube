@@ -79,7 +79,7 @@ function setupCornerHandles(){
 function getCornersInNaturalPixels(){
   return cornerHandles.map(h => [ h.xPct/100*photoImgEl.naturalWidth, h.yPct/100*photoImgEl.naturalHeight ]);
 }
-function renderDecodedSecret(rawText, totalCorrected){
+function renderDecodedSecret(rawText){
   const reveal = document.getElementById('decodeReveal');
   const decoded = parseDecodedPayload(rawText);
   reveal.innerHTML = '';
@@ -105,12 +105,6 @@ function renderDecodedSecret(rawText, totalCorrected){
       list.appendChild(row);
     });
     reveal.appendChild(list);
-  }
-  if (totalCorrected>0){
-    const note = document.createElement('div');
-    note.style.marginTop = '12px';
-    note.textContent = `[Reed-Solomon corrigió ${totalCorrected} byte(s) dañado(s) automáticamente]`;
-    reveal.appendChild(note);
   }
 }
 function tiersToTryForCurrentImage(){
@@ -241,9 +235,9 @@ export function initCamera(){
     try{
       if (detectedSheetTier){
         // Imagen subida = hoja de 6 caras 3D exportada: léela directamente.
-        const { payload, totalCorrected } = decodeSheetImage(photoImgEl, TIERS[detectedSheetTier].grid);
+        const { payload } = decodeSheetImage(photoImgEl, TIERS[detectedSheetTier].grid);
         const result = await tryDecryptPayload(payload, pass);
-        renderDecodedSecret(result.text, totalCorrected);
+        renderDecodedSecret(result.text);
         document.getElementById('decodeOutput').classList.remove('hidden');
         return;
       }
@@ -258,7 +252,7 @@ export function initCamera(){
         }
       }
       if (!decoded) throw new Error(detectedDecodeTier ? errors[0] : 'No se pudo descifrar probando Mini, Estándar y Pro. Revisa la frase o ajusta mejor las esquinas.');
-      renderDecodedSecret(decoded.result.text, decoded.totalCorrected);
+      renderDecodedSecret(decoded.result.text);
       document.getElementById('decodeOutput').classList.remove('hidden');
     } catch(e){ showError(e.message); }
     finally{ btn.disabled=false; btn.textContent='Descifrar'; }

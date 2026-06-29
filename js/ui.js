@@ -33,9 +33,6 @@ export function setTheme(theme){
   saveTheme(theme);
   applyTheme();
 }
-export function toggleTheme(){
-  setTheme(appState.theme === 'dark' ? 'light' : 'dark');
-}
 
 /* ---- Toasts superiores ---- */
 let toastContainer = null;

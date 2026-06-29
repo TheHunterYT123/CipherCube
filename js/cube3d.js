@@ -184,51 +184,6 @@ function rotPoint(nx, ny, k){
 function luma(rgb){ return 0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2]; }
 function isDark(rgb){ return luma(rgb) < 110; }
 
-/**
- * Intenta leer una baldosa dadas las 4 esquinas en la imagen.
- * Devuelve { ok, faceIndex, rotation, cells } o { ok:false, reason }.
- * `data` es el Uint8ClampedArray RGBA del frame; w,h sus dimensiones.
- */
-export function readFaceTile(data, w, h, corners, grid){
-  const sample = makeSampler(data, w, h, corners);
-  const MARK = 0.012; // radio normalizado para promediar marcas (finders/marco/id)
-  // Prueba las 4 rotaciones; la correcta reproduce el patrón canónico de finders.
-  for (let k = 0; k < 4; k++){
-    const pattern = FINDER_CENTERS.map(([cx, cy]) => {
-      const [rx, ry] = rotPoint(cx, cy, k);
-      return isDark(sample.avg(rx, ry, MARK));
-    });
-    const matches = pattern.every((d, i) => d === CANONICAL_DARK[i]);
-    if (!matches) continue;
-    // Verifica marco oscuro en los puntos medios de los lados.
-    const frameDark = [[0.5, F / 2], [0.5, 1 - F / 2], [F / 2, 0.5], [1 - F / 2, 0.5]]
-      .every(([fx, fy]) => { const [rx, ry] = rotPoint(fx, fy, k); return isDark(sample.avg(rx, ry, MARK)); });
-    if (!frameDark) continue;
-    // Lee identidad de cara (3 bits) en orientación canónica.
-    let faceIndex = 0;
-    for (let b = 0; b < 3; b++){
-      const [rx, ry] = rotPoint(ID_BIT_X[b], ID_BIT_Y, k);
-      faceIndex = (faceIndex << 1) | (isDark(sample.avg(rx, ry, MARK)) ? 1 : 0);
-    }
-    if (faceIndex < 0 || faceIndex >= FACE_COUNT) continue;
-    // Lee la rejilla de datos en orientación canónica.
-    const dataSpan = 1 - 2 * DI;
-    const cellN = dataSpan / grid;
-    const cells = new Array(grid * grid);
-    let idx = 0;
-    for (let r = 0; r < grid; r++){
-      for (let c = 0; c < grid; c++){
-        const cx = DI + (c + 0.5) * cellN;
-        const cy = DI + (r + 0.5) * cellN;
-        const [rx, ry] = rotPoint(cx, cy, k);
-        cells[idx++] = nearestPaletteIndex(sample(rx, ry));
-      }
-    }
-    return { ok: true, faceIndex, rotation: k, cells };
-  }
-  return { ok: false, reason: 'no-tile' };
-}
-
 /* ---- API para escaneo en vivo: detección barata + warp + multi-capacidad ---- */
 
 /** Detecta solo orientación e identidad (sin muestrear toda la rejilla). Barato
@@ -280,22 +235,42 @@ export function warpToCanonical(data, w, h, corners, rotation, outSize = 600){
 /* ---- Afinado de esquinas reales de la baldosa (clave para la cámara) ----
    La detección es tolerante (marcas grandes y promediadas), así que valida la
    cara aunque no llene exacto el recuadro guía; pero entonces la rejilla de datos
-   se muestrea corrida y la lectura sale basura. Aquí localizamos los BORDES
-   reales del marco negro (transición papel-blanco → marco-negro, el rasgo de
-   mayor contraste de la baldosa), ajustamos una recta a cada arista y obtenemos
-   las 4 esquinas por intersección. Maneja escala, desplazamiento y giro residual. */
+   se muestrea corrida y la lectura sale basura. Aquí localizamos el marco negro.
+
+   IMPORTANTE — por qué se ancla en el borde INTERIOR del marco y no el exterior:
+   el borde exterior (transición fondo→marco) solo es fiable si el fondo es claro
+   (papel). Al escanear desde una PANTALLA, o sobre una mesa/sombra oscura, el
+   fondo es oscuro y se funde con el marco negro: buscar "la primera racha oscura
+   desde fuera" agarraba el FONDO, no el marco, y disparaba la baldosa a ~1.22× su
+   tamaño real → la rejilla de datos quedaba descuadrada y TODA la lectura salía
+   basura (causa real del fallo crónico de escaneo). El borde INTERIOR del marco
+   (transición marco-negro → banda-blanca interior) es invariante a lo que haya
+   fuera: la banda blanca siempre está ahí. Desde ese cuadro interior (posición
+   canónica conocida [F,1-F]) se reconstruyen las esquinas exteriores por
+   homografía exacta. */
 
 function lumaAt(data, w, x, y){ const i = ((y | 0) * w + (x | 0)) * 4; return 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]; }
 
-/** Camina desde (x0,y0) en pasos (dx,dy) y devuelve el punto donde empieza la
- * primera racha oscura de al menos `minRun` (el borde exterior del marco). */
-function scanFrameEdge(data, w, h, x0, y0, dx, dy, steps, thr, minRun){
-  let runStart = -1, run = 0;
+/** Camina desde (x0,y0) en pasos (dx,dy) y devuelve el BORDE INTERIOR del marco:
+ * el punto donde, tras una racha oscura de al menos `minDark` (el marco, que
+ * puede venir fundido con un fondo oscuro), reaparece la banda BLANCA interior
+ * (racha clara de al menos `minLight`). Cualquier racha clara ANTERIOR al marco
+ * (papel del fondo) se ignora. Así el resultado no depende de si el exterior de
+ * la baldosa es claro u oscuro. */
+function scanInnerFrameEdge(data, w, h, x0, y0, dx, dy, steps, thr, minDark, minLight){
+  let dark = 0, frameSeen = false, lightStart = -1, light = 0;
   for (let s = 0; s < steps; s++){
     const x = x0 + dx * s, y = y0 + dy * s;
-    if (x < 0 || x >= w || y < 0 || y >= h){ runStart = -1; run = 0; continue; }
-    if (lumaAt(data, w, x, y) < thr){ if (runStart < 0) runStart = s; if (++run >= minRun) return [x0 + dx * runStart, y0 + dy * runStart]; }
-    else { runStart = -1; run = 0; }
+    if (x < 0 || x >= w || y < 0 || y >= h){ if (!frameSeen) dark = 0; continue; }
+    if (lumaAt(data, w, x, y) < thr){
+      dark++; light = 0; lightStart = -1;
+      if (dark >= minDark) frameSeen = true;
+    } else if (frameSeen){
+      if (lightStart < 0) lightStart = s;
+      if (++light >= minLight) return [x0 + dx * lightStart, y0 + dy * lightStart];
+    } else {
+      dark = 0; // racha clara previa al marco (fondo de papel): se ignora
+    }
   }
   return null;
 }
@@ -310,6 +285,32 @@ function fitLine(points, mode){
   if (Math.abs(den) < 1e-6) return null;
   const a = (n * suv - su * sv) / den;
   return [a, (sv - a * su) / n]; // v = a*u + b
+}
+
+/** Ajuste de recta ROBUSTO: descarta atípicos iterativamente. Lo necesita la
+ * detección del borde interior porque un finder o un bit de identidad que caiga
+ * bajo una línea de barrido (cuando la baldosa está girada/encogida respecto al
+ * guide) fusiona su negro con el del marco y empuja ESE punto hacia dentro. Esos
+ * atípicos son minoría y siempre apuntan hacia el centro, así que basta con
+ * quitar el de mayor residual mientras supere `tol` y queden ≥3 puntos. */
+function fitLineRobust(points, mode, tol){
+  let pts = points.slice();
+  let line = fitLine(pts, mode);
+  if (!line) return null;
+  while (pts.length > 3){
+    let worst = -1, worstRes = 0;
+    for (let i = 0; i < pts.length; i++){
+      const u = mode === 'xy' ? pts[i][1] : pts[i][0];
+      const v = mode === 'xy' ? pts[i][0] : pts[i][1];
+      const res = Math.abs(v - (line[0] * u + line[1]));
+      if (res > worstRes){ worstRes = res; worst = i; }
+    }
+    if (worstRes <= tol) break;
+    pts.splice(worst, 1);
+    line = fitLine(pts, mode);
+    if (!line) return null;
+  }
+  return line;
 }
 
 /** Intersección de una arista vertical (x=aL*y+bL) con una horizontal (y=aT*x+bT). */
@@ -338,33 +339,53 @@ export function refineTileCornersDebug(data, w, h, corners, rotation){
     return lumaAt(data, w, Math.max(0, Math.min(w - 1, Math.round(px))), Math.max(0, Math.min(h - 1, Math.round(py))));
   });
   const thr = Math.max(...whiteSamples, 60) * 0.55;
-  const margin = tileSpan * 0.14;            // arranca fuera del guide (papel blanco)
-  const steps = Math.round(tileSpan * 0.4);  // alcance del barrido hacia el centro
-  const minRun = Math.max(4, Math.round(F * tileSpan * 0.45)); // ~mitad del grosor del marco
-  const fracs = [0.28, 0.4, 0.5, 0.6, 0.72]; // posiciones de barrido (evita las esquinas)
+  const margin = tileSpan * 0.14;             // arranca fuera del guide
+  const steps = Math.round(tileSpan * 0.45);  // alcance del barrido (atraviesa marco→banda)
+  const minDark = Math.max(4, Math.round(F * tileSpan * 0.45));  // ~mitad del grosor del marco
+  const minLight = Math.max(4, Math.round(B * tileSpan * 0.12)); // confirma la banda blanca interior
+  // Posiciones de barrido en BANDA BLANCA limpia. En los bordes sup/inf se evitan
+  // los finders (esquinas) y los 3 bits de identidad (centro, x≈0.394–0.606); en
+  // izq/der solo hay finders en las esquinas. Se toman VARIAS posiciones por arista
+  // para que, si la baldosa girada/encogida desliza un finder bajo alguna columna,
+  // ese punto atípico quede en minoría y lo descarte el ajuste robusto de recta.
+  const fracsLR = [0.25, 0.35, 0.45, 0.55, 0.65, 0.75];
+  const fracsTB = [0.22, 0.28, 0.34, 0.66, 0.72, 0.78];
   // Caja aproximada del guide (ejes de la imagen).
   const xL0 = corners[0][0], xR0 = corners[1][0], yT0 = corners[0][1], yB0 = corners[3][1];
   const lerp = (a, b, t) => a + (b - a) * t;
 
   const leftPts = [], rightPts = [], topPts = [], botPts = [];
-  for (const t of fracs){
-    const y = lerp(yT0, yB0, t), x = lerp(xL0, xR0, t);
-    const pL = scanFrameEdge(data, w, h, xL0 - margin, y, 1, 0, steps, thr, minRun);
-    const pR = scanFrameEdge(data, w, h, xR0 + margin, y, -1, 0, steps, thr, minRun);
-    const pT = scanFrameEdge(data, w, h, x, yT0 - margin, 0, 1, steps, thr, minRun);
-    const pB = scanFrameEdge(data, w, h, x, yB0 + margin, 0, -1, steps, thr, minRun);
-    if (pL) leftPts.push(pL); if (pR) rightPts.push(pR); if (pT) topPts.push(pT); if (pB) botPts.push(pB);
+  for (const t of fracsLR){
+    const y = lerp(yT0, yB0, t);
+    const pL = scanInnerFrameEdge(data, w, h, xL0 - margin, y, 1, 0, steps, thr, minDark, minLight);
+    const pR = scanInnerFrameEdge(data, w, h, xR0 + margin, y, -1, 0, steps, thr, minDark, minLight);
+    if (pL) leftPts.push(pL); if (pR) rightPts.push(pR);
+  }
+  for (const t of fracsTB){
+    const x = lerp(xL0, xR0, t);
+    const pT = scanInnerFrameEdge(data, w, h, x, yT0 - margin, 0, 1, steps, thr, minDark, minLight);
+    const pB = scanInnerFrameEdge(data, w, h, x, yB0 + margin, 0, -1, steps, thr, minDark, minLight);
+    if (pT) topPts.push(pT); if (pB) botPts.push(pB);
   }
   const counts = { left: leftPts.length, right: rightPts.length, top: topPts.length, bot: botPts.length };
   if (leftPts.length < 3 || rightPts.length < 3 || topPts.length < 3 || botPts.length < 3){
     return { corners, refined: false, reason: 'pocos-bordes', counts, thr: Math.round(thr) };
   }
-  const left = fitLine(leftPts, 'xy'), right = fitLine(rightPts, 'xy');
-  const top = fitLine(topPts, 'yx'), bot = fitLine(botPts, 'yx');
+  const tol = Math.max(3, tileSpan * 0.012); // ~7px en muestreo de 720: separa el ruido sub-px de un finder (decenas de px)
+  const left = fitLineRobust(leftPts, 'xy', tol), right = fitLineRobust(rightPts, 'xy', tol);
+  const top = fitLineRobust(topPts, 'yx', tol), bot = fitLineRobust(botPts, 'yx', tol);
   if (!left || !right || !top || !bot) return { corners, refined: false, reason: 'ajuste-de-recta-fallo', counts };
-  const refined = [intersect(left, top), intersect(right, top), intersect(right, bot), intersect(left, bot)];
+  // Esquinas del BORDE INTERIOR del marco [TL,TR,BR,BL] (cuadro canónico [F,1-F]).
+  const inner = [intersect(left, top), intersect(right, top), intersect(right, bot), intersect(left, bot)];
+  for (const c of inner){ if (!c) return { corners, refined: false, reason: 'sin-interseccion', counts }; }
+  // Del borde interior (canónico [F,1-F]) a las esquinas EXTERIORES de la baldosa
+  // (canónico [0,1]) por homografía exacta — tolera perspectiva leve sin suponer
+  // marco simétrico, y es independiente del fondo exterior.
+  const innerCanon = [[F, F], [1 - F, F], [1 - F, 1 - F], [F, 1 - F]];
+  const Hci = computeHomography(innerCanon, inner); // canónico → imagen
+  const refined = [[0, 0], [1, 0], [1, 1], [0, 1]].map(([sx, sy]) => applyHomography(Hci, sx, sy));
   for (const c of refined){
-    if (!c) return { corners, refined: false, reason: 'sin-interseccion', counts };
+    if (!c || !isFinite(c[0]) || !isFinite(c[1])) return { corners, refined: false, reason: 'sin-interseccion', counts };
     const [x, y] = c;
     if (x < -w || x > 2 * w || y < -h || y > 2 * h) return { corners, refined: false, reason: 'esquina-fuera-de-rango', counts };
   }
@@ -481,6 +502,27 @@ export function sampleFaceCellsRGB(canon, grid){
  * teórica fija. Rápida y exacta para hojas pixel-perfect; es el primer intento. */
 export function sampleFaceCells(canon, grid){
   return sampleFaceCellsRGB(canon, grid).map(nearestPaletteIndex);
+}
+
+/** Lee la identidad de cara (0..5) y valida las marcas sobre una baldosa YA
+ * enderezada (canónica). Es mucho más fiable que la lectura de detectTile sobre
+ * el frame crudo: detectTile muestrea finders/bits SIN corregir el giro residual
+ * de la mano (~2-3°), que desplaza los pequeños bits de identidad —alejados del
+ * centro— casi media casilla y los lee mal → cara equivocada (típicamente la 0).
+ * Sobre la canónica afinada las marcas caen en su sitio. Devuelve {ok, faceIndex}.
+ * Si no se ve el patrón de marcas (warp dudoso) devuelve {ok:false} y el llamador
+ * conserva la cara que dio la detección. */
+export function readCanonicalFaceId(canon){
+  const { data, size } = canon;
+  const dark = (nx, ny) => isDark(avgCanonRegion(data, size, nx, ny, 0.018));
+  // Finders [TL,TR,BR,BL] = [oscuro,oscuro,claro,oscuro].
+  if (!FINDER_CENTERS.every(([cx, cy], i) => dark(cx, cy) === CANONICAL_DARK[i])) return { ok: false };
+  // Marco oscuro en los puntos medios de los lados.
+  if (![[0.5, F / 2], [0.5, 1 - F / 2], [F / 2, 0.5], [1 - F / 2, 0.5]].every(([fx, fy]) => dark(fx, fy))) return { ok: false };
+  let faceIndex = 0;
+  for (let b = 0; b < 3; b++) faceIndex = (faceIndex << 1) | (dark(ID_BIT_X[b], ID_BIT_Y) ? 1 : 0);
+  if (faceIndex < 0 || faceIndex >= FACE_COUNT) return { ok: false };
+  return { ok: true, faceIndex };
 }
 
 /** SOLO DIAGNÓSTICO. Devuelve, para cada celda de datos en orden de lectura, la
@@ -658,7 +700,6 @@ export function facesToPayload(facesByIndex, grid, parity = RS_PARITY){
 /* ---- Partes Shamir como cubos escaneables ----
    Una parte usa SHARE_GRID y NO lleva Reed-Solomon: el ensamblado va directo
    de colores a bytes de la parte (igual que la lectura de lámina de parte). */
-export function shareSheetLayout(){ return sheetLayout(SHARE_GRID); }
 
 function shareCanonToPayload(canonByFace){
   const facesByIndex = {};

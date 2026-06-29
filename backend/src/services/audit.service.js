@@ -47,8 +47,3 @@ export async function logEvent(type, message, opts = {}){
     console.error('[audit] No se pudo registrar el evento:', e.message);
   }
 }
-
-/** Extrae datos de auditoría de una petición Express de forma segura. */
-export function reqMeta(req){
-  return { ip: req.ip, userEmail: req.user?.email, userId: req.user?.id };
-}

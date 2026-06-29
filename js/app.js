@@ -282,29 +282,12 @@ function initGenerate(){
     finally { btn.disabled=false; btn.textContent='Generar cubo cifrado'; }
   });
 }
-/** Hoja imprimible de 6 baldosas escaneables (2 columnas × 3 filas) a partir de colorIndices. */
-function buildFaceSheetCanvas(colorIndices, grid){
-  const tiles = renderAllFaceTilesV2(colorIndices, grid);
-  const tile = tiles[0].width;
-  const pad = Math.round(tile * 0.12), cols = 2, rows = 3;
-  const sheet = document.createElement('canvas');
-  sheet.width = pad + cols * (tile + pad);
-  sheet.height = pad + rows * (tile + pad);
-  const sctx = sheet.getContext('2d');
-  sctx.fillStyle = '#ffffff'; sctx.fillRect(0, 0, sheet.width, sheet.height);
-  tiles.forEach((t, i) => {
-    const cx = pad + (i % cols) * (tile + pad);
-    const cy = pad + Math.floor(i / cols) * (tile + pad);
-    sctx.drawImage(t, cx, cy);
-  });
-  return sheet;
-}
-
-/** Abre una hoja A4 lista para imprimir: 6 caras a tamaño físico exacto (50 mm),
- * con líneas de corte, etiqueta de cada cara e instrucciones de armado. El usuario
- * solo imprime al 100% y pega; no tiene que pelear con medidas. */
+/** Abre una hoja lista para imprimir (A4 o Carta): 6 caras a tamaño físico exacto
+ * (50 mm), con líneas de corte, etiqueta de cada cara e instrucciones de armado.
+ * El usuario solo imprime al 100% y pega; no tiene que pelear con medidas. */
 function openPrintSheet(colorIndices, grid, opts){
   opts = opts || {};
+  const paperSize = opts.paperSize === 'letter' ? 'letter' : 'A4';
   const faceMm = 50;
   const tiles = renderAllFaceTilesV2(colorIndices, grid);
   const cells = tiles.map((t, i) => {
@@ -329,7 +312,7 @@ function openPrintSheet(colorIndices, grid, opts){
   .cut img{ width:100%; height:100%; display:block; image-rendering:pixelated; }
   .cap{ font-size:8pt; color:#333; margin-top:3.5mm; font-weight:600; }
   .note{ font-size:8.5pt; color:#666; margin-top:12pt; }
-  @page{ size:A4 portrait; margin:10mm; }
+  @page{ size:${paperSize} portrait; margin:10mm; }
   @media print{ .screen-only{ display:none !important; } body{ padding:0; } }
 </style></head>
 <body>
@@ -362,29 +345,22 @@ function initResultView(){
       downloadMenu.classList.add('hidden');
     }
   });
-  document.getElementById('downloadBtn').addEventListener('click', () => {
-    if (!lastGenerated) return;
-    const link=document.createElement('a');
-    link.download=`ciphercube-${lastGenerated.tier}.png`;
-    link.href=lastGenerated.canvas.toDataURL('image/png');
-    link.click();
-    downloadMenu.classList.add('hidden');
-  });
-  document.getElementById('download3dBtn').addEventListener('click', () => {
+  document.getElementById('download3dA4Btn').addEventListener('click', () => {
     if (!lastGenerated) return;
     openPrintSheet(lastGenerated.indices, lastGenerated.grid, {
       title: `CipherCube ${TIERS[lastGenerated.tier] ? TIERS[lastGenerated.tier].label : ''}`.trim(),
       heading: 'Cubo para imprimir y armar',
+      paperSize: 'a4',
     });
     downloadMenu.classList.add('hidden');
   });
-  document.getElementById('download3dPngBtn').addEventListener('click', () => {
+  document.getElementById('download3dLetterBtn').addEventListener('click', () => {
     if (!lastGenerated) return;
-    const sheet = buildFaceSheetCanvas(lastGenerated.indices, lastGenerated.grid);
-    const link = document.createElement('a');
-    link.download = `ciphercube-${lastGenerated.tier}-caras3d.png`;
-    link.href = sheet.toDataURL('image/png');
-    link.click();
+    openPrintSheet(lastGenerated.indices, lastGenerated.grid, {
+      title: `CipherCube ${TIERS[lastGenerated.tier] ? TIERS[lastGenerated.tier].label : ''}`.trim(),
+      heading: 'Cubo para imprimir y armar',
+      paperSize: 'letter',
+    });
     downloadMenu.classList.add('hidden');
   });
   document.getElementById('viewInfoBtn').addEventListener('click', () => {

@@ -10,7 +10,6 @@
 .admin-topbar{display:flex;align-items:center;gap:12px;padding:14px 16px;border-bottom:1px solid var(--color-border);background:var(--color-surface-translucent);backdrop-filter:blur(10px);}
 .admin-topbar .at-title{font-size:17px;font-weight:800;letter-spacing:-.02em;display:flex;align-items:center;gap:9px;}
 .admin-topbar .at-dot{width:9px;height:9px;border-radius:50%;background:#33d17a;box-shadow:0 0 0 3px rgba(51,209,122,.18);}
-.admin-mock-badge{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--color-danger);background:var(--color-danger-bg);padding:3px 8px;border-radius:999px;}
 .admin-topbar .at-spacer{flex:1;}
 .admin-icon-btn{width:38px;height:38px;border-radius:11px;border:1px solid var(--color-border);background:var(--color-surface);color:var(--color-text);cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:16px;}
 .admin-icon-btn:hover{background:var(--color-surface-2);}
@@ -49,7 +48,6 @@
 .chart-svg .area{fill:var(--color-accent);opacity:.10;}
 .chart-svg .line{fill:none;stroke:var(--color-accent);stroke-width:2.4;stroke-linecap:round;stroke-linejoin:round;}
 .chart-svg .bar{fill:var(--color-accent);opacity:.82;}
-.chart-svg .axis-label{fill:var(--color-text-tertiary);font-size:9px;}
 
 /* ---- Donut ---- */
 .donut-wrap{display:flex;align-items:center;gap:18px;flex-wrap:wrap;}

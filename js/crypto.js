@@ -67,8 +67,7 @@ export async function deriveKeyV2Argon2id(passphrase, salt, context){
   return crypto.subtle.importKey('raw', result.hash, 'AES-GCM', false, ['encrypt','decrypt']);
 }
 /** Cifra un slot de tamaño fijo con una clave AES-GCM ya derivada (por
- * cualquier KDF). encryptFixedSlot (abajo) sigue intacta: solo deriva la
- * clave por PBKDF2 y delega aquí, sin cambiar su comportamiento. */
+ * cualquier KDF). */
 async function encryptFixedSlotWithKey(plaintextStr, key, fixedLen){
   const enc = new TextEncoder();
   const rawBytes = enc.encode(plaintextStr);
@@ -86,14 +85,6 @@ async function decryptFixedSlotWithKey(iv, ciphertext, key){
   const padded = new Uint8Array(plainBuf);
   const len = (padded[0]<<8)|padded[1];
   return new TextDecoder().decode(padded.slice(2,2+len));
-}
-export async function encryptFixedSlot(plaintextStr, passphrase, salt, context, fixedLen){
-  const key = await deriveKey(passphrase, salt, context);
-  return encryptFixedSlotWithKey(plaintextStr, key, fixedLen);
-}
-export async function decryptFixedSlot(iv, ciphertext, passphrase, salt, context){
-  const key = await deriveKey(passphrase, salt, context);
-  return decryptFixedSlotWithKey(iv, ciphertext, key);
 }
 export async function hmacOffset(passphrase, salt, rangeSize){
   const enc = new TextEncoder();
