@@ -267,7 +267,14 @@ function isDark(rgb){ return luma(rgb) < 110; }
 // (90-95%) hacía que los puntos de revisión del marco cayeran fuera de la
 // cara real (en el papel blanco) y la detección fallaba por completo —
 // nunca llegaba a refineTileCorners, que sí tolera bien ese rango.
-const DETECT_SHRINKS = [1, 0.97, 0.94, 0.91, 0.88, 0.85];
+// Factores de escala de la cara respecto al recuadro guía. <1: la cara queda más
+// chica y centrada (lo típico a mano con papel, que deja margen blanco). >1: la
+// cara DESBORDA la guía — pasa en el CUBO FÍSICO, donde la cara impresa va pegada
+// al borde y la llenas sin margen, así que ocupa más que la guía. Sin los factores
+// >1 esos encuadres no se detectaban (la cara llenaba el cuadro y los puntos de
+// chequeo del marco caían dentro de la zona de datos). Se ordenan de lo más común
+// (≈1) a lo extremo para retornar rápido en el caso normal.
+const DETECT_SHRINKS = [1, 0.97, 1.05, 0.94, 1.1, 0.91, 1.15, 0.88, 1.2, 0.85];
 // Ángulos finos (grados) que se prueban ADEMÁS de los 4 múltiplos de 90°. El
 // usuario tiene mal pulso: a mano la cara entra girada unos grados y antes la
 // detección fallaba en seco (los puntos de chequeo del marco/finders, lejos del

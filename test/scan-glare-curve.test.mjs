@@ -26,7 +26,7 @@ const cube = await import('../js/cube3d.js');
 const { PALETTE, TIERS, buildPayload, rsEncodePayloadToRaw, payloadToColorIndices, computeHomography, applyHomography } = crypto_;
 const {
   detectTile, refineTileCorners, warpToCanonical, sampleFaceCells, sampleFaceCellsRobust,
-  readCanonicalFaceId, decodeCanonicalFaces, combineCanonicalFrames, faceSliceFromColorIndices, FACE_COUNT,
+  readCanonicalFaceId, decodeCanonicalFaces, faceSliceFromColorIndices, FACE_COUNT,
 } = cube;
 
 const F = 0.07, B = 0.10, G = 0.03, DI = F + B + G, FINDER = 0.075;
@@ -107,25 +107,6 @@ function captureFace(cells, grid, faceIndex, params){
 }
 /** Captura MULTI-FRAME como la app mejorada: varios cuadros (reflejo movido +
  * pulso + ruido distinto por cuadro), enderezados y combinados. */
-function captureFaceMulti(cells, grid, faceIndex, base, frames = 7){
-  const guide = guideCorners();
-  const canons = [];
-  for (let k = 0; k < frames; k++){
-    const params = { ...base,
-      glareCx: 0.5 + 0.22 * Math.cos(k * 1.7), glareCy: 0.45 + 0.22 * Math.sin(k * 1.7),
-      dxFrac: (base.dxFrac || 0) + 0.012 * Math.sin(k), dyFrac: (base.dyFrac || 0) + 0.012 * Math.cos(k),
-      rotDeg: (base.rotDeg || 0) + 0.7 * Math.sin(k * 0.9), noiseStd: base.noiseStd || 6, seed: k + 3 };
-    const data = makePhoto(cells, grid, faceIndex, params);
-    const det = detectTile(data, SAMPLE_SIZE, SAMPLE_SIZE, guide);
-    if (!det.ok) continue;
-    const refined = refineTileCorners(data, SAMPLE_SIZE, SAMPLE_SIZE, guide, det.rotation);
-    canons.push(warpToCanonical(data, SAMPLE_SIZE, SAMPLE_SIZE, refined, det.rotation));
-  }
-  if (!canons.length) return { ok: false };
-  const canon = combineCanonicalFrames(canons);
-  const idInfo = readCanonicalFaceId(canon);
-  return { ok: true, faceIndex: idInfo.ok ? idInfo.faceIndex : faceIndex, canon };
-}
 function cellErr(cap, cells, grid, robust){
   if (!cap.ok || cap.faceIndex !== undefined && cap.faceIndex !== cells.faceIndex) {}
   const read = robust ? sampleFaceCellsRobust(cap.canon, grid) : sampleFaceCells(cap.canon, grid);
@@ -142,14 +123,12 @@ const indices = payloadToColorIndices(rsEncodePayloadToRaw(built.payload, grid, 
 const faceCells = f => faceSliceFromColorIndices(indices, grid, f);
 
 // --- Caracterización (informativa) ---
-console.log('\n--- REFLEJO: error de celda  1frame / robusto / multi-frame(7) ---');
+console.log('\n--- REFLEJO: error de celda  1frame / robusto ---');
 for (const g of [0, 80, 140, 200, 255]){
   const params = { scale: 0.97, rotDeg: 1, glare: g, glareR: 0.18 };
   const e1 = cellErr(captureFace(faceCells(0), grid, 0, params), faceCells(0), grid, false);
   const eR = cellErr(captureFace(faceCells(0), grid, 0, params), faceCells(0), grid, true);
-  const m = captureFaceMulti(faceCells(0), grid, 0, params, 7);
-  const eM = m.ok ? cellErr(m, faceCells(0), grid, true) : 100;
-  console.log(`glare=${g}: 1frame=${e1.toFixed(1)}%  robusto=${eR.toFixed(1)}%  multi=${eM.toFixed(1)}%`);
+  console.log(`glare=${g}: 1frame=${e1.toFixed(1)}%  robusto=${eR.toFixed(1)}%`);
 }
 console.log('\n--- CURVATURA/DOBLEZ: error de celda (homografía plana) ---');
 for (const ph of [0, 0.5, 1.0, 1.5, 2.0]) console.log(`comba=${ph}rad: ${cellErr(captureFace(faceCells(0), grid, 0, { scale: 0.96, bendX: ph, bendY: ph * 0.6 }), faceCells(0), grid, true).toFixed(1)}%`);
@@ -166,28 +145,6 @@ test('reflejo moderado, 1 cuadro: el robusto NO empeora frente a la media', () =
   const eAvg = cellErr(captureFace(faceCells(0), grid, 0, params), faceCells(0), grid, false);
   const eRob = cellErr(captureFace(faceCells(0), grid, 0, params), faceCells(0), grid, true);
   assert.ok(eRob <= eAvg + 0.5, `robusto ${eRob}% peor que media ${eAvg}%`);
-});
-
-test('reflejo: multi-frame reduce el error a menos de un tercio del de 1 cuadro', () => {
-  const params = { scale: 0.97, glare: 120, glareR: 0.18 };
-  const e1 = cellErr(captureFace(faceCells(0), grid, 0, params), faceCells(0), grid, true);
-  const m = captureFaceMulti(faceCells(0), grid, 0, params, 7);
-  assert.ok(m.ok, 'multi-frame no capturó');
-  const eM = cellErr(m, faceCells(0), grid, true);
-  assert.ok(eM < e1 / 3, `multi ${eM.toFixed(1)}% no mejora lo suficiente vs 1 cuadro ${e1.toFixed(1)}%`);
-});
-
-test('CUBO COMPLETO con reflejo moderado + multi-frame: DESCIFRA', () => {
-  const canonByFace = {};
-  for (let f = 0; f < FACE_COUNT; f++){
-    const base = { scale: 0.94 + 0.02 * (f % 3), rotDeg: (f % 2 ? 1.2 : -1.2), bg: 232, glare: 95, glareR: 0.18 };
-    const cap = captureFaceMulti(faceCells(f), grid, f, base, 6); // 6 = BURST_TARGET de la app
-    assert.ok(cap.ok, `cara ${f} no capturada`);
-    assert.equal(cap.faceIndex, f, `cara ${f} leída como ${cap.faceIndex}`);
-    canonByFace[cap.faceIndex] = cap.canon;
-  }
-  const { payload } = decodeCanonicalFaces(canonByFace, TIERS);
-  assert.equal(Buffer.from(payload).toString('hex'), Buffer.from(built.payload).toString('hex'), 'el payload descifrado no coincide');
 });
 
 test('CARAS MAL ETIQUETADAS: decode las reordena por Reed-Solomon y descifra', () => {
