@@ -126,6 +126,15 @@
 .scan-frame .c3{bottom:0;left:0;border-right:none;border-top:none;border-radius:0 0 0 6px;}
 .scan-frame .c4{bottom:0;right:0;border-left:none;border-top:none;border-radius:0 0 6px 0;}
 .scan-done .scan-frame .corner{border-color:#33d17a;}
+/* "Fijando cara": mientras se acumula la ráfaga multi-frame las esquinas laten en
+   cian, para que se vea que SÍ está agarrando (clave para pulso tembloroso). */
+.scan-locking .scan-frame .corner{border-color:#39c5ff;animation:scanLockPulse .55s ease-in-out infinite;}
+@keyframes scanLockPulse{0%,100%{opacity:.5}50%{opacity:1}}
+/* Barra de progreso del fijado, dentro del visor. */
+.scan-lockbar{position:absolute;left:9%;right:9%;bottom:6%;height:4px;z-index:4;border-radius:999px;
+  background:rgba(255,255,255,.22);overflow:hidden;opacity:0;transition:opacity .15s ease;}
+.scan-locking .scan-lockbar{opacity:1;}
+.scan-lockbar>i{display:block;height:100%;width:0;background:#39c5ff;border-radius:999px;transition:width .12s linear;}
 /* Mensaje de estado: fuera del visor (debajo), para no tapar las esquinas. */
 .scan-status{margin:10px 0 4px;text-align:center;font-size:12px;font-weight:600;color:var(--color-text);
   background:var(--color-surface);border:1px solid var(--color-border);border-radius:10px;padding:9px 12px;line-height:1.35;}

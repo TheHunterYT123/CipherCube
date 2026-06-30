@@ -16,13 +16,15 @@
 import {
   FACE_LABELS, FACE_ORDER, TIERS, tryDecryptPayload, parseDecodedPayload, dataUrlForFileEntry,
 } from './crypto.js';
-import { detectTile, warpToCanonical, refineTileCorners, readCanonicalFaceId, decodeCanonicalFaces, FACE_COUNT } from './cube3d.js';
+import { detectTile, warpToCanonical, refineTileCorners, readCanonicalFaceId, decodeCanonicalFaces, combineCanonicalFrames, FACE_COUNT } from './cube3d.js';
 import { showToast, showError } from './ui.js';
 
 const SAMPLE_SIZE = 720;        // lado del lienzo cuadrado de muestreo (más px/celda en Pro)
 const GUIDE_INSET = 0.09;       // margen de la guía (coincide con el CSS .scan-frame)
-const STABLE_NEEDED = 4;        // lecturas estables consecutivas antes de capturar
-const DETECT_EVERY_MS = 110;    // periodicidad de detección
+const BURST_TARGET = 6;         // cuadros a combinar por cara (≈0.5s a mano)
+const DETECT_EVERY_MS = 80;     // periodicidad de detección (antes 110: ahora agarra más rápido)
+const BURST_MAX_MISS = 6;       // cuadros sin detección tolerados sin perder la ráfaga (mal pulso)
+const OTHER_SWITCH = 2;         // una cara distinta vista N veces seguidas = es otra cara, no flicker
 const ROTATE_PAUSE_MS = 1300;   // pausa con animación "gira el cubo"
 
 function guideCorners(){
@@ -55,7 +57,11 @@ export function createLiveScanner(config){
   let running = false;
   let paused = false;
   let lastDetect = 0;
-  let stableFace = -1, stableCount = 0;
+  // Ráfaga multi-frame en curso (o null). Acumula varios cuadros enderezados de la
+  // misma cara para combinarlos: tolera reflejos (el brillo se mueve con el pulso)
+  // y mal pulso (no se pierde por un cuadro borroso suelto).
+  let burst = null; // { face, canons:[], miss, other, otherCount }
+  let lockBar = null;
   let captured = {};
 
   function setStatus(text){ if (els.status) els.status.textContent = text; }
@@ -122,22 +128,35 @@ export function createLiveScanner(config){
     setTimeout(() => { els.rotate.classList.remove('show'); paused = false; if (running) setStatus('Buscando una cara…'); }, ROTATE_PAUSE_MS);
   }
 
-  function captureFace(detection){
+  function setLock(active, frac){
+    if (els.viewfinder) els.viewfinder.classList.toggle('scan-locking', !!active);
+    if (lockBar) lockBar.style.width = `${Math.round(Math.min(1, frac || 0) * 100)}%`;
+  }
+
+  /** Endereza el cuadro ACTUAL del lienzo a un cuadrado canónico. Afina las
+   * esquinas reales del marco antes de enderezar: la detección es tolerante a
+   * desalineación pero la rejilla de datos no, así que sin esto la lectura sale
+   * corrida aunque la cara se haya "detectado bien". */
+  function warpCurrentFrame(detection){
     const img = cleanCtx.getImageData(0, 0, SAMPLE_SIZE, SAMPLE_SIZE);
-    // Afinar las esquinas reales del marco antes de enderezar: la detección es
-    // tolerante a desalineación pero la rejilla de datos no, así que sin esto la
-    // lectura sale corrida aunque la cara se haya "detectado bien".
     const corners = refineTileCorners(img.data, SAMPLE_SIZE, SAMPLE_SIZE, guideCorners(), detection.rotation);
-    const canon = warpToCanonical(img.data, SAMPLE_SIZE, SAMPLE_SIZE, corners, detection.rotation);
-    // La cara DEFINITIVA se relee de la baldosa ya enderezada: detectTile lee los
-    // bits de identidad sobre el frame crudo y un giro residual de la mano (~2°)
-    // basta para que lea la cara equivocada. Sobre la canónica afinada caen en su
-    // sitio. Si el patrón no se ve, se conserva la cara de la detección.
+    return warpToCanonical(img.data, SAMPLE_SIZE, SAMPLE_SIZE, corners, detection.rotation);
+  }
+
+  /** Combina los cuadros de la ráfaga y guarda la cara. La identidad DEFINITIVA se
+   * relee de la baldosa ya combinada/enderezada (readCanonicalFaceId): es mucho más
+   * fiable que la lectura por cuadro de detectTile, que se equivoca de cara con un
+   * giro residual de la mano. Si aun así no se ve el patrón, se conserva la cara que
+   * dio la detección. El descifrado final reordena las caras por Reed-Solomon, así
+   * que una etiqueta de cara equivocada deja de ser fatal. */
+  function finalizeBurst(canons, fallbackFace){
+    setLock(false, 0);
+    const canon = combineCanonicalFrames(canons);
     const idInfo = readCanonicalFaceId(canon);
-    const faceIndex = idInfo.ok ? idInfo.faceIndex : detection.faceIndex;
+    const faceIndex = idInfo.ok ? idInfo.faceIndex : fallbackFace;
     const isNew = !captured[faceIndex];
     captured[faceIndex] = canon;
-    stableFace = -1; stableCount = 0;
+    burst = null;
     flash();
     playCaptureAnimation();
     renderProgress();
@@ -148,7 +167,7 @@ export function createLiveScanner(config){
     }
     paused = true;
     showRotateHint();
-    if (!isNew) showToast('Esa cara se actualizó.');
+    if (!isNew) showToast('Esa cara ya estaba; muestra una nueva.');
   }
 
   function tryDetectFrame(){
@@ -171,13 +190,41 @@ export function createLiveScanner(config){
     if (paused) return;
     if (ts - lastDetect < DETECT_EVERY_MS) return;
     lastDetect = ts;
+    if (Object.keys(captured).length >= FACE_COUNT) return;
 
     const det = tryDetectFrame();
-    if (!det.ok){ stableFace = -1; stableCount = 0; if (Object.keys(captured).length < FACE_COUNT) setStatus('Centra una cara del cubo en el recuadro.'); return; }
-    if (captured[det.faceIndex]){ setStatus('Esa cara ya está. Muestra otra (o reescanéala con “Capturar ahora”).'); return; }
-    if (det.faceIndex === stableFace){ stableCount++; } else { stableFace = det.faceIndex; stableCount = 1; }
-    setStatus(`Detectando cara… manténla firme (${Math.min(stableCount, STABLE_NEEDED)}/${STABLE_NEEDED})`);
-    if (stableCount >= STABLE_NEEDED) captureFace(det);
+    if (!det.ok){
+      // No se ve cara. Si hay ráfaga en curso, tolera varios cuadros perdidos (mal
+      // pulso / desenfoque momentáneo) antes de descartarla.
+      if (burst){
+        if (++burst.miss > BURST_MAX_MISS){ burst = null; setLock(false, 0); setStatus('Centra una cara del cubo en el recuadro.'); }
+        else setStatus(`Fijando cara… mantén firme (${burst.canons.length}/${BURST_TARGET})`);
+      } else {
+        setStatus('Centra una cara del cubo en el recuadro.');
+      }
+      return;
+    }
+    // Hay una cara detectada. NO se rechaza por la etiqueta de detección (poco
+    // fiable): se acumula y al final se relee la cara de la canónica combinada.
+    if (!burst){
+      burst = { face: det.faceIndex, canons: [warpCurrentFrame(det)], miss: 0, other: -1, otherCount: 0, rotation: det.rotation };
+    } else if (det.faceIndex === burst.face){
+      burst.miss = 0; burst.other = -1; burst.otherCount = 0;
+      burst.canons.push(warpCurrentFrame(det));
+    } else {
+      // Etiqueta distinta a la de la ráfaga: ¿flicker de detección o de verdad es
+      // otra cara (el usuario ya giró el cubo)? Solo se cambia si persiste.
+      if (det.faceIndex === burst.other) burst.otherCount++; else { burst.other = det.faceIndex; burst.otherCount = 1; }
+      if (burst.otherCount >= OTHER_SWITCH){
+        burst = { face: det.faceIndex, canons: [warpCurrentFrame(det)], miss: 0, other: -1, otherCount: 0, rotation: det.rotation };
+      }
+      // si es solo flicker, se ignora este cuadro (no se añade ni se descarta)
+    }
+    if (burst){
+      setLock(true, burst.canons.length / BURST_TARGET);
+      setStatus(`Fijando cara… mantén firme (${burst.canons.length}/${BURST_TARGET})`);
+      if (burst.canons.length >= BURST_TARGET) finalizeBurst(burst.canons, burst.face);
+    }
   }
 
   async function start(){
@@ -234,7 +281,8 @@ export function createLiveScanner(config){
 
   function resetScan(){
     captured = {};
-    stableFace = -1; stableCount = 0; paused = false;
+    burst = null; paused = false;
+    setLock(false, 0);
     if (els.output) els.output.classList.add('hidden');
     if (els.pass) els.pass.value = '';
     renderProgress();
@@ -279,13 +327,27 @@ export function createLiveScanner(config){
     els.canvas.width = SAMPLE_SIZE; els.canvas.height = SAMPLE_SIZE;
     cleanCanvas = els.canvas;
     cleanCtx = cleanCanvas.getContext('2d', { willReadFrequently: true });
+    // Barra de progreso del "fijado" (ráfaga multi-frame), creada en JS para no
+    // tocar el HTML de ambos escáneres.
+    if (els.viewfinder && !els.viewfinder.querySelector('.scan-lockbar')){
+      lockBar = document.createElement('i');
+      const wrap = document.createElement('div');
+      wrap.className = 'scan-lockbar'; wrap.appendChild(lockBar);
+      els.viewfinder.appendChild(wrap);
+    }
 
     els.captureBtn.addEventListener('click', () => {
       if (!running){ showError('La cámara no está activa.'); return; }
       const det = tryDetectFrame();
-      if (!det.ok){ showToast('No veo una cara válida; acércala y céntrala.'); return; }
-      if (captured[det.faceIndex]) showToast('Recapturando esa cara.');
-      paused = false; captureFace(det);
+      if (!det.ok && !burst){ showToast('No veo una cara válida; acércala y céntrala.'); return; }
+      // Captura inmediata: aprovecha la ráfaga ya acumulada (mejor calidad) y le
+      // suma el cuadro actual si hay una cara detectada ahora mismo.
+      paused = false;
+      const canons = burst ? burst.canons.slice() : [];
+      const face = burst ? burst.face : det.faceIndex;
+      if (det.ok) canons.push(warpCurrentFrame(det));
+      if (!canons.length){ showToast('No veo una cara válida; acércala y céntrala.'); return; }
+      finalizeBurst(canons, face);
     });
     els.resetBtn.addEventListener('click', resetScan);
     els.actionBtn.addEventListener('click', runAction);

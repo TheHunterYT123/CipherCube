@@ -181,6 +181,13 @@ function rotPoint(nx, ny, k){
   for (let i = 0; i < k; i++){ const nxr = -y, nyr = x; x = nxr; y = nyr; }
   return [x + 0.5, y + 0.5];
 }
+/** Rota (nx,ny) un ángulo arbitrario `deg` (grados) alrededor del centro. Para
+ * deg = k*90 coincide exactamente con rotPoint(.,.,k). */
+function rotPointDeg(nx, ny, deg){
+  const t = deg * Math.PI / 180, c = Math.cos(t), s = Math.sin(t);
+  const x = nx - 0.5, y = ny - 0.5;
+  return [0.5 + x * c - y * s, 0.5 + x * s + y * c];
+}
 function luma(rgb){ return 0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2]; }
 function isDark(rgb){ return luma(rgb) < 110; }
 
@@ -195,22 +202,33 @@ function isDark(rgb){ return luma(rgb) < 110; }
 // cara real (en el papel blanco) y la detección fallaba por completo —
 // nunca llegaba a refineTileCorners, que sí tolera bien ese rango.
 const DETECT_SHRINKS = [1, 0.97, 0.94, 0.91, 0.88, 0.85];
+// Ángulos finos (grados) que se prueban ADEMÁS de los 4 múltiplos de 90°. El
+// usuario tiene mal pulso: a mano la cara entra girada unos grados y antes la
+// detección fallaba en seco (los puntos de chequeo del marco/finders, lejos del
+// centro, se salían de su sitio con ~5° de giro). Con esta tolerancia "agarra"
+// mucho más fácil; el giro residual exacto lo corrige refineTileCorners después,
+// así que `rotation` sigue siendo el múltiplo de 90° (k). Se prueba 0° primero
+// para que un encuadre recto retorne de inmediato (coste casi nulo en ese caso).
+const DETECT_FINE_DEG = [0, -5, 5, -10, 10];
 
 export function detectTile(data, w, h, corners){
   const sample = makeSampler(data, w, h, corners);
   const MARK = 0.012; // radio normalizado para promediar marcas (estabiliza con cámara)
   const at = (nx, ny, s) => (s === 1 ? [nx, ny] : [0.5 + (nx - 0.5) * s, 0.5 + (ny - 0.5) * s]);
   for (let k = 0; k < 4; k++){
-    for (const s of DETECT_SHRINKS){
-      const pattern = FINDER_CENTERS.map(([cx, cy]) => { const [px, py] = at(cx, cy, s); const [rx, ry] = rotPoint(px, py, k); return isDark(sample.avg(rx, ry, MARK)); });
-      if (!pattern.every((d, i) => d === CANONICAL_DARK[i])) continue;
-      const frameDark = [[0.5, F / 2], [0.5, 1 - F / 2], [F / 2, 0.5], [1 - F / 2, 0.5]]
-        .every(([fx, fy]) => { const [px, py] = at(fx, fy, s); const [rx, ry] = rotPoint(px, py, k); return isDark(sample.avg(rx, ry, MARK)); });
-      if (!frameDark) continue;
-      let faceIndex = 0;
-      for (let b = 0; b < 3; b++){ const [px, py] = at(ID_BIT_X[b], ID_BIT_Y, s); const [rx, ry] = rotPoint(px, py, k); faceIndex = (faceIndex << 1) | (isDark(sample.avg(rx, ry, MARK)) ? 1 : 0); }
-      if (faceIndex < 0 || faceIndex >= FACE_COUNT) continue;
-      return { ok: true, faceIndex, rotation: k };
+    for (const fine of DETECT_FINE_DEG){
+      const rot = (nx, ny) => rotPointDeg(nx, ny, k * 90 + fine);
+      for (const s of DETECT_SHRINKS){
+        const pattern = FINDER_CENTERS.map(([cx, cy]) => { const [px, py] = at(cx, cy, s); const [rx, ry] = rot(px, py); return isDark(sample.avg(rx, ry, MARK)); });
+        if (!pattern.every((d, i) => d === CANONICAL_DARK[i])) continue;
+        const frameDark = [[0.5, F / 2], [0.5, 1 - F / 2], [F / 2, 0.5], [1 - F / 2, 0.5]]
+          .every(([fx, fy]) => { const [px, py] = at(fx, fy, s); const [rx, ry] = rot(px, py); return isDark(sample.avg(rx, ry, MARK)); });
+        if (!frameDark) continue;
+        let faceIndex = 0;
+        for (let b = 0; b < 3; b++){ const [px, py] = at(ID_BIT_X[b], ID_BIT_Y, s); const [rx, ry] = rot(px, py); faceIndex = (faceIndex << 1) | (isDark(sample.avg(rx, ry, MARK)) ? 1 : 0); }
+        if (faceIndex < 0 || faceIndex >= FACE_COUNT) continue;
+        return { ok: true, faceIndex, rotation: k };
+      }
     }
   }
   return { ok: false };
@@ -427,6 +445,64 @@ function avgCanonRegion(data, size, cx, cy, halfN){
   return n ? [r / n, g / n, b / n] : [0, 0, 0];
 }
 
+function med1(arr){ arr.sort((a, b) => a - b); const m = arr.length >> 1; return arr.length % 2 ? arr[m] : (arr[m - 1] + arr[m]) / 2; }
+
+/** Como avgCanonRegion, pero MEDIANA por canal en vez de media. Es la clave para
+ * tolerar REFLEJOS de luz (brillo especular): un reflejo revienta a blanco una
+ * MINORÍA de los píxeles de la celda; la media los arrastra hacia el blanco y
+ * cambia el color leído, pero la mediana los descarta mientras el color real siga
+ * siendo mayoría (<50% de la celda reflejada). En una celda limpia y uniforme la
+ * mediana es idéntica a la media, así que las hojas pixel-perfect no cambian. */
+function medianCanonRegion(data, size, cx, cy, halfN){
+  const x0 = Math.max(0, Math.floor((cx - halfN) * size));
+  const x1 = Math.min(size - 1, Math.ceil((cx + halfN) * size));
+  const y0 = Math.max(0, Math.floor((cy - halfN) * size));
+  const y1 = Math.min(size - 1, Math.ceil((cy + halfN) * size));
+  const rs = [], gs = [], bs = [];
+  for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++){
+    const i = (y * size + x) * 4; rs.push(data[i]); gs.push(data[i + 1]); bs.push(data[i + 2]);
+  }
+  return rs.length ? [med1(rs), med1(gs), med1(bs)] : [0, 0, 0];
+}
+
+/** Combina varios lienzos canónicos (mismo tamaño) en uno, resistente a REFLEJOS
+ * y a ruido. Es el arma principal contra el reflejo en vivo.
+ *
+ * Idea clave: un reflejo especular solo SUMA brillo, nunca lo quita. Y como el
+ * brillo se desliza con el pulso de la mano, un mismo punto de la cara solo está
+ * reflejado en una minoría de los cuadros. Así que por cada píxel ordenamos los
+ * cuadros por luminancia, DESCARTAMOS el ~40% más brillante (los reflejados) y
+ * promediamos el resto (el color real, con el ruido de sensor promediado). El
+ * descarte es por LUMINANCIA del píxel completo (no por canal) para no torcer el
+ * tono de los cuadros que sí conservamos.
+ *
+ * En cuadros limpios sin reflejo todos valen casi lo mismo, así que el resultado
+ * es esencialmente la media y no degrada nada (un leve oscurecimiento uniforme
+ * que la calibración negro→10/blanco→255 reabsorbe). Cada cuadro se endereza de
+ * forma independiente al mismo lienzo canónico, así que están alineados aunque la
+ * mano se moviera entre cuadros. */
+export function combineCanonicalFrames(canons){
+  const list = canons.filter(Boolean);
+  if (!list.length) throw new Error('No hay cuadros para combinar.');
+  if (list.length === 1) return list[0];
+  const size = list[0].size, n = list.length;
+  const keep = Math.max(1, Math.round(n * 0.6)); // conserva el 60% más oscuro
+  const out = new Uint8ClampedArray(size * size * 4);
+  const order = new Array(n);
+  for (let p = 0; p < size * size; p++){
+    const i = p * 4;
+    for (let k = 0; k < n; k++){
+      const d = list[k].data;
+      order[k] = { l: 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2], r: d[i], g: d[i + 1], b: d[i + 2] };
+    }
+    order.sort((a, b) => a.l - b.l);
+    let r = 0, g = 0, b = 0;
+    for (let k = 0; k < keep; k++){ r += order[k].r; g += order[k].g; b += order[k].b; }
+    out[i] = r / keep; out[i + 1] = g / keep; out[i + 2] = b / keep; out[i + 3] = 255;
+  }
+  return { data: out, size };
+}
+
 /** Mediana por canal de una lista de muestras RGB. Rechaza puntos atípicos
  * (p. ej. una banda blanca manchada de tinta o un finder mal recortado) sin
  * dejar que arrastren el promedio, cosa que sí hacía la media aritmética. */
@@ -470,7 +546,7 @@ const BLACK_TARGET = 10;
  * tinte de luz, exposición y el negro elevado de la cámara mucho mejor que solo
  * ganancia de blanco; en hojas exportadas pixel-perfect (negro≈10, blanco≈255) la
  * transformación es la identidad, así que ese camino no cambia. */
-export function sampleFaceCellsRGB(canon, grid){
+function sampleFaceCellsRGBWith(canon, grid, cellSampler){
   const { data, size } = canon;
   const dataSpan = 1 - 2 * DI;
   const cellN = dataSpan / grid;
@@ -486,7 +562,7 @@ export function sampleFaceCellsRGB(canon, grid){
   for (let r = 0; r < grid; r++){
     for (let c = 0; c < grid; c++){
       const nx = DI + (c + 0.5) * cellN, ny = DI + (r + 0.5) * cellN;
-      let rgb = avgCanonRegion(data, size, nx, ny, half);
+      let rgb = cellSampler(data, size, nx, ny, half);
       if (calibrate){
         rgb = rgb.map((v, ch) => {
           const out = BLACK_TARGET + (v - black[ch]) / span[ch] * (255 - BLACK_TARGET);
@@ -498,10 +574,21 @@ export function sampleFaceCellsRGB(canon, grid){
   }
   return cells;
 }
+export function sampleFaceCellsRGB(canon, grid){ return sampleFaceCellsRGBWith(canon, grid, avgCanonRegion); }
+
+/** Igual que sampleFaceCellsRGB pero con MEDIANA por celda (tolerante a reflejos).
+ * Idéntica a la media en celdas limpias/uniformes, así que no cambia la lectura de
+ * hojas pixel-perfect; solo difiere cuando un reflejo contamina parte de la celda. */
+export function sampleFaceCellsRGBRobust(canon, grid){ return sampleFaceCellsRGBWith(canon, grid, medianCanonRegion); }
+
 /** Lectura "congelada" por celda: el RGB calibrado clasificado contra la paleta
  * teórica fija. Rápida y exacta para hojas pixel-perfect; es el primer intento. */
 export function sampleFaceCells(canon, grid){
   return sampleFaceCellsRGB(canon, grid).map(nearestPaletteIndex);
+}
+/** Variante robusta a reflejos de la lectura congelada (mediana por celda). */
+export function sampleFaceCellsRobust(canon, grid){
+  return sampleFaceCellsRGBRobust(canon, grid).map(nearestPaletteIndex);
 }
 
 /** Lee la identidad de cara (0..5) y valida las marcas sobre una baldosa YA
@@ -544,49 +631,94 @@ export function dataSampleBoxes(grid){
   return boxes;
 }
 
-/** Clasifica las 6 caras por color ADAPTATIVO (clustering global): muestrea el
- * RGB calibrado de cada celda de todas las caras y deja que colorcluster mapee
- * los colores como los ve la cámara. Devuelve {faceIndex: cells}. */
+/** Clasifica una LISTA de baldosas enderezadas por color ADAPTATIVO (clustering
+ * global): muestrea el RGB robusto de cada celda de todas las baldosas y deja que
+ * colorcluster mapee los colores como los ve la cámara. Devuelve un array con las
+ * celdas de cada baldosa, en el mismo orden de entrada. */
+function clusterClassifyTiles(tiles, grid){
+  const facesRgb = tiles.map(c => sampleFaceCellsRGBRobust(c, grid));
+  return classifyCellsAdaptive(facesRgb);
+}
+
+/** Compat: clasifica {faceIndex: canon} (lo usa el diagnóstico). */
 function clusterClassifyFaces(canonByFace, grid){
-  const facesRgb = [];
-  for (let f = 0; f < FACE_COUNT; f++) facesRgb.push(sampleFaceCellsRGB(canonByFace[f], grid));
-  const labels = classifyCellsAdaptive(facesRgb);
+  const tiles = [];
+  for (let f = 0; f < FACE_COUNT; f++) tiles.push(canonByFace[f]);
+  const labels = clusterClassifyTiles(tiles, grid);
   const facesByIndex = {};
   for (let f = 0; f < FACE_COUNT; f++) facesByIndex[f] = labels[f];
   return facesByIndex;
+}
+
+/** Permutaciones candidatas para reasignar caras mal etiquetadas, CERCA de la
+ * identidad: identidad, todos los intercambios SIMPLES (una cara confundida con
+ * otra) y todos los intercambios DOBLES disjuntos (dos confusiones). Cubre el
+ * caso real del problema #4 ("a veces piensa que es otra cara" = una o dos caras
+ * cruzadas) sin pagar las 720 permutaciones completas, que congelarían varios
+ * segundos el móvil cuando un escaneo es genuinamente malo. Una mezcla total
+ * (las 6 caras en un ciclo) no es un patrón real de lectura de identidad. */
+function* candidatePermutations(n){
+  const id = Array.from({ length: n }, (_, i) => i);
+  yield id.slice();
+  for (let a = 0; a < n; a++) for (let b = a + 1; b < n; b++){
+    const p = id.slice(); const t = p[a]; p[a] = p[b]; p[b] = t; yield p;
+  }
+  for (let a = 0; a < n; a++) for (let b = a + 1; b < n; b++)
+    for (let c = a + 1; c < n; c++){ if (c === b) continue;
+      for (let d = c + 1; d < n; d++){ if (d === b) continue;
+        const p = id.slice();
+        let t = p[a]; p[a] = p[b]; p[b] = t; t = p[c]; p[c] = p[d]; p[d] = t;
+        yield p;
+      }
+    }
 }
 
 /** Dadas las 6 caras enderezadas (objeto {faceIndex: canon}), prueba cada
  * capacidad de `tiers` hasta que Reed-Solomon valide. Devuelve
  * { payload, totalCorrected, grid, tier }.
  *
- * Dos pasadas: primero el lector "congelado" (paleta fija) — rápido y exacto
- * para hojas pixel-perfect. Si NINGUNA capacidad valida con él, se reintenta con
- * la clasificación ADAPTATIVA por clustering, que tolera la curva de tono no
- * lineal de cámaras/pantallas (gamma, tinte, saturación) que descoloca un color
- * entero de la paleta. El resultado siempre lo valida Reed-Solomon, así que el
- * clustering nunca produce un falso positivo: si su lectura no cuadra, no valida
- * y se descarta. */
+ * Tres ejes de reintento, del más barato/probable al más caro:
+ *  1) Color: primero el lector "congelado" robusto (paleta fija, mediana por
+ *     celda) — rápido y exacto para hojas pixel-perfect y tolerante a reflejos.
+ *     Si nada valida, la clasificación ADAPTATIVA por clustering, que además
+ *     tolera la curva de tono no lineal de cámaras/pantallas (gamma/tinte/satur.).
+ *  2) Capacidad y paridad: prueba mini/estándar/pro y normal/alta corrección.
+ *  3) ASIGNACIÓN de caras (fase 'permute'): si con la asignación tal cual (la que
+ *     dio la lectura de identidad de cara) nada valida, prueba TODAS las
+ *     permutaciones de qué baldosa va en cada posición. Así, que el detector lea
+ *     mal qué cara es (problema crónico: los bits de identidad son diminutos)
+ *     deja de importar — Reed-Solomon valida la única asignación correcta y
+ *     descarta el resto. RS nunca da falso positivo, así que es seguro.
+ *
+ * El muestreo de cada baldosa se cachea por (color, capacidad), así que las 720
+ * permutaciones solo reordenan celdas ya muestreadas: la fase cara solo se paga
+ * cuando de verdad hizo falta. */
 export function decodeCanonicalFaces(canonByFace, tiers){
-  for (const adaptive of [false, true]){
-    for (const tierKey of Object.keys(tiers)){
-      const grid = tiers[tierKey].grid;
-      let facesByIndex;
-      try{
-        if (adaptive){
-          facesByIndex = clusterClassifyFaces(canonByFace, grid);
-        } else {
-          facesByIndex = {};
-          for (let f = 0; f < FACE_COUNT; f++) facesByIndex[f] = sampleFaceCells(canonByFace[f], grid);
-        }
-      } catch(_){ continue; }
-      // El muestreo no depende de la paridad usada al crear el cubo, así que se
-      // reutiliza facesByIndex y solo se reintenta el reparto datos/paridad.
-      for (const parity of parityCandidatesForGrid(grid)){
+  const tiles = [];
+  for (let f = 0; f < FACE_COUNT; f++){
+    if (!canonByFace[f]) throw new Error(`Falta la cara ${f + 1} de ${FACE_COUNT}.`);
+    tiles.push(canonByFace[f]);
+  }
+  for (const phase of ['identity', 'permute']){
+    for (const adaptive of [false, true]){
+      for (const tierKey of Object.keys(tiers)){
+        const grid = tiers[tierKey].grid;
+        let tileCells;
         try{
-          const { payload, totalCorrected } = facesToPayload(facesByIndex, grid, parity);
-          return { payload, totalCorrected, grid, tier: tierKey, parity };
-        } catch(_){ /* prueba la siguiente paridad o capacidad */ }
+          tileCells = adaptive ? clusterClassifyTiles(tiles, grid)
+                               : tiles.map(c => sampleFaceCellsRobust(c, grid));
+        } catch(_){ continue; }
+        for (const perm of (phase === 'identity' ? [[0, 1, 2, 3, 4, 5]] : candidatePermutations(FACE_COUNT))){
+          if (phase === 'permute' && perm.every((v, i) => v === i)) continue; // ya probada en fase identity
+          const facesByIndex = {};
+          for (let f = 0; f < FACE_COUNT; f++) facesByIndex[f] = tileCells[perm[f]];
+          for (const parity of parityCandidatesForGrid(grid)){
+            try{
+              const { payload, totalCorrected } = facesToPayload(facesByIndex, grid, parity);
+              return { payload, totalCorrected, grid, tier: tierKey, parity };
+            } catch(_){ /* prueba la siguiente paridad / permutación / capacidad */ }
+          }
+        }
       }
     }
   }
