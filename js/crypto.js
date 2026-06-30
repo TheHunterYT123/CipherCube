@@ -280,6 +280,76 @@ export function rsDecodeBlock(received, k, parity){
   }
   return { data: received.slice(0,k), corrected:-1, success:false };
 }
+/** Decodifica un bloque RS por BORRONES (erasures): se le dan posiciones de byte
+ * SOSPECHOSAS (donde se cree que la lectura está mal). Asumiendo que todos los
+ * errores caen en esas posiciones, corrige hasta `parity` borrones — el DOBLE que
+ * la corrección ciega (parity/2 errores). Es justo lo que hace falta para un
+ * reflejo localizado que revienta varias celdas juntas. Verifica los síndromes al
+ * final, así que una marca equivocada simplemente no valida y se descarta: nunca
+ * produce una corrección falsa. erasurePositions: índices 0..n-1 dentro del bloque
+ * (0 = primer byte = recibido[0]). */
+export function rsDecodeBlockErasures(received, k, parity, erasurePositions){
+  const n = k + parity;
+  const erp = [...new Set(erasurePositions)].filter(p => p >= 0 && p < n);
+  const f = erp.length;
+  const syndromes = []; for (let j=1;j<=parity;j++) syndromes.push(rsEvalPoly(received, rsPow(2,j)));
+  if (syndromes.every(s=>s===0)) return { data: received.slice(0,k), corrected:0, success:true };
+  if (f === 0 || f > parity) return { data: received.slice(0,k), corrected:-1, success:false };
+  // Localizador de cada borrón: para el byte en índice `pos` (MSB-first), X = α^(n-1-pos).
+  const X = erp.map(pos => rsPow(2, n-1-pos));
+  // Sistema lineal (Vandermonde, invertible porque los X_i son distintos y ≠0):
+  // para r=1..f, Σ_i Y_i·X_i^r = S_r. Se resuelven las magnitudes Y_i.
+  const M = [], v = [];
+  for (let r=1;r<=f;r++){ const row=[]; for (let i=0;i<f;i++) row.push(rsPow(X[i], r)); M.push(row); v.push(syndromes[r-1]); }
+  const Y = rsSolveGF(M, v);
+  if (!Y) return { data: received.slice(0,k), corrected:-1, success:false };
+  const corrected = new Uint8Array(received);
+  for (let i=0;i<f;i++) corrected[erp[i]] ^= Y[i];
+  const check=[]; for (let j=1;j<=parity;j++) check.push(rsEvalPoly(corrected, rsPow(2,j)));
+  if (check.every(s=>s===0)) return { data: corrected.slice(0,k), corrected:f, success:true };
+  return { data: received.slice(0,k), corrected:-1, success:false };
+}
+
+/** Como rsDecodeRawToPayload, pero si un bloque falla la corrección ciega lo
+ * reintenta por BORRONES con `byteSuspicion` (sospecha por byte del flujo raw;
+ * 0 = no sospechoso, mayor = más probable que esté mal leído). Por bloque, marca
+ * como borrón los bytes sospechosos en cantidad CRECIENTE hasta que Reed-Solomon
+ * valide. Recupera defectos localizados (reflejo) que la corrección ciega no
+ * alcanza, sin cambiar el formato.
+ *
+ * SEGURIDAD (clave para no inventar descifrados): las posiciones son ADIVINADAS,
+ * así que se topan en `parity-2` borrones para dejar ≥2 síndromes de validación.
+ * Con `parity` borrones exactos el sistema anula TODOS los síndromes por
+ * construcción → la verificación sería vacía y "validaría" cualquier basura. Con 2
+ * síndromes libres, una marca equivocada se delata (prob. de falso positivo
+ * ~1/65536 por intento, y además solo se marcan bytes que superaron el umbral de
+ * sospecha, que en una lectura limpia no marca nada). */
+export function rsDecodeRawWithErasures(raw, grid, parity, byteSuspicion){
+  const { raw:rawLen, numBlocks, usable, k } = effectiveCapacityForGrid(grid, parity);
+  if (raw.length !== rawLen) throw new Error('La imagen no corresponde a esta capacidad seleccionada.');
+  const maxMarks = Math.max(1, parity - 2);
+  const payload = new Uint8Array(usable);
+  let totalCorrected = 0;
+  for (let i=0;i<numBlocks;i++){
+    const block = raw.slice(i*RS_N, (i+1)*RS_N);
+    let res = rsDecodeBlock(block, k, parity); // primero la corrección ciega probada
+    if (!res.success){
+      const cands = [];
+      for (let p=0;p<RS_N;p++){ const s = byteSuspicion[i*RS_N+p] || 0; if (s > 0) cands.push([s, p]); }
+      cands.sort((a,b)=>b[0]-a[0]); // más sospechosos primero
+      const limit = Math.min(cands.length, maxMarks);
+      for (let nMark=1; nMark<=limit && !res.success; nMark++){
+        const er = rsDecodeBlockErasures(block, k, parity, cands.slice(0,nMark).map(o=>o[1]));
+        if (er.success) res = er;
+      }
+    }
+    if (!res.success) throw new Error(`El cubo está demasiado dañado para recuperarse (bloque ${i+1} de ${numBlocks} con más errores de los corregibles).`);
+    if (res.corrected>0) totalCorrected += res.corrected;
+    payload.set(res.data, i*k);
+  }
+  return { payload, totalCorrected };
+}
+
 export function rsEncodePayloadToRaw(payload, grid, parity = RS_PARITY){
   const {raw,numBlocks,usable,k} = effectiveCapacityForGrid(grid, parity);
   if (payload.length !== usable) throw new Error('Tamaño de payload inesperado para este grid.');

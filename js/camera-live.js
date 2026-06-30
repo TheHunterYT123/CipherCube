@@ -327,6 +327,25 @@ export function createLiveScanner(config){
     return cv.toDataURL('image/png');
   }
 
+  /** Tras un fallo de RECONSTRUCCIÓN, encuentra la cara con más bloques dañados
+   * (un reflejo localizado suele dañar una sola), la QUITA y pide re-mostrarla.
+   * Como la captura en vivo es instantánea, el usuario solo vuelve a enseñar esa
+   * cara (inclinada para evitar el brillo) y el escáner la recaptura solo → 6/6 →
+   * Descifrar otra vez. Es el arreglo fiable: el daño por reflejo no se recupera a
+   * nivel Reed-Solomon, pero re-capturar la cara sin luz sí. */
+  function dropWorstFaceAndGuide(){
+    let rep = null;
+    try{ rep = diagnoseCanonicalFaces({ ...captured }, TIERS); } catch(_){ return; }
+    if (!rep) return;
+    let worst = -1, worstN = 0;
+    for (let f = 0; f < FACE_COUNT; f++){ if (rep.perFaceFailed[f] > worstN){ worstN = rep.perFaceFailed[f]; worst = f; } }
+    if (worst < 0 || worstN === 0) return;
+    delete captured[worst];
+    resetStable(); paused = false;
+    renderProgress();
+    setStatus(`La cara ${worst + 1} tiene reflejo o daño. Muéstrala otra vez, inclinándola para que NO le dé la luz; se recaptura sola y luego pulsa Descifrar.`);
+  }
+
   function showDiagnostic(){
     if (!els.diag) return;
     let url; try{ url = buildDiagnosticDataURL(); } catch(_){ return; }
@@ -353,9 +372,9 @@ export function createLiveScanner(config){
       if (config.resetAfterAction) resetScan();
     } catch(e){
       showError(e.message);
-      // Diagnóstico visual SOLO para el escáner del cubo (decode Reed-Solomon): así
-      // el usuario puede mandar una imagen de lo que ve el escáner y ver la causa.
-      if (config.diagnostic) showDiagnostic();
+      // Solo si falló la RECONSTRUCCIÓN del cubo (no por frase incorrecta): muestra
+      // el diagnóstico visual y deja lista la re-captura de la cara más dañada.
+      if (config.diagnostic && e.scanFailed){ showDiagnostic(); dropWorstFaceAndGuide(); }
     } finally {
       btn.disabled = false;
       renderProgress();
@@ -458,7 +477,11 @@ const cubeScanner = createLiveScanner({
   resetAfterAction: false,
   diagnostic: true,
   onAction: async (canonByFace, { pass }) => {
-    const { payload } = decodeCanonicalFaces(canonByFace, TIERS);
+    let payload;
+    // Marca el fallo de RECONSTRUCCIÓN (escaneo) para distinguirlo de una frase
+    // incorrecta: solo el primero justifica re-escanear una cara.
+    try{ ({ payload } = decodeCanonicalFaces(canonByFace, TIERS)); }
+    catch(e){ e.scanFailed = true; throw e; }
     const result = await tryDecryptPayload(payload, pass);
     renderCubeReveal(result.text);
     document.getElementById('liveDecodeOutput').classList.remove('hidden');

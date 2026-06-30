@@ -15,11 +15,77 @@
    ========================================================= */
 import {
   PALETTE, FACE_ORDER, FACE_LABELS, SHARE_GRID, TIERS,
-  capacityBytesForGrid, colorIndicesToPayload, rsDecodeRawToPayload,
-  nearestPaletteIndex, computeHomography, applyHomography,
+  capacityBytesForGrid, colorIndicesToPayload, rsDecodeRawToPayload, rsDecodeRawWithErasures,
+  nearestPaletteIndex, hexToRgb, computeHomography, applyHomography,
   rsDecodeBlock, effectiveCapacityForGrid, RS_N, RS_K, RS_PARITY, RS_PARITY_HIGH,
 } from './crypto.js';
 import { classifyCellsAdaptive } from './colorcluster.js';
+
+const PAL_RGB = PALETTE.map(hexToRgb);
+/** Clasifica cada celda (RGB calibrado) a su índice de paleta y devuelve TAMBIÉN
+ * la distancia² al color asignado. Esa distancia es la "sospecha": una celda bien
+ * leída cae pegada a su color (distancia chica); una reventada por reflejo o
+ * borrosa cae lejos de TODA la paleta (distancia grande) → candidata a borrón. */
+function classifyWithDistance(rgbCells){
+  const idx = new Array(rgbCells.length);
+  const dist = new Float64Array(rgbCells.length);
+  for (let i = 0; i < rgbCells.length; i++){
+    const rgb = rgbCells[i]; let best = 0, bd = Infinity;
+    for (let p = 0; p < PAL_RGB.length; p++){
+      const c = PAL_RGB[p]; const d = (c[0]-rgb[0])**2 + (c[1]-rgb[1])**2 + (c[2]-rgb[2])**2;
+      if (d < bd){ bd = d; best = p; }
+    }
+    idx[i] = best; dist[i] = bd;
+  }
+  return { idx, dist };
+}
+
+// Una celda solo es candidata a BORRÓN si su color queda CLARAMENTE lejos de toda
+// la paleta (distancia² calibrada). Una celda bien leída cae casi pegada a su color
+// (incluso una mal leída pero "confiada" cae sobre OTRO color de paleta, distancia
+// chica). Solo el reflejo/desenfoque la empuja a tierra de nadie. Este umbral es la
+// salvaguarda clave: sin él se marcarían celdas limpias y los borrones inventarían
+// un descifrado falso (los síndromes se anularían por construcción). ~75²: muy por
+// encima del ruido de una lectura limpia, muy por debajo de un blanco reventado.
+const ERASURE_DIST_THRESHOLD = 5600;
+
+/** Sospecha por byte del flujo raw a partir de la distancia por celda.
+ *
+ * Una celda REVENTADA por reflejo (centro del brillo) cae lejos de toda la paleta
+ * (distancia > umbral) → marcable. Pero el BORDE del reflejo (penumbra) empuja
+ * celdas a OTRO color de paleta: mal leídas pero con distancia chica, invisibles al
+ * umbral. Como el reflejo es un blob CONTIGUO, esas celdas penumbra son vecinas de
+ * las reventadas. Por eso se DILATA la marca: una celda es sospechosa si está
+ * reventada O si toca (4-vecindad, dentro de su cara) a una reventada. Así se
+ * captura toda la región dañada, no solo el núcleo. La sospecha del núcleo (la
+ * distancia real) va más alta que la de la penumbra, para marcarla primero.
+ * `dist` está en orden de caras (cada cara es un grid×grid contiguo). */
+function byteSuspicionFromCellDist(dist, grid){
+  const per = grid * grid, faces = Math.round(dist.length / per);
+  const PENUMBRA = ERASURE_DIST_THRESHOLD * 0.5; // sospecha asignada a vecinos dilatados
+  const cellSus = new Float64Array(dist.length);
+  for (let f = 0; f < faces; f++){
+    for (let r = 0; r < grid; r++) for (let c = 0; c < grid; c++){
+      const gi = f * per + r * grid + c;
+      if (dist[gi] < ERASURE_DIST_THRESHOLD) continue;
+      if (dist[gi] > cellSus[gi]) cellSus[gi] = dist[gi]; // núcleo reventado
+      // dilata a la 4-vecindad dentro de la MISMA cara (penumbra del blob)
+      if (r > 0 && cellSus[gi - grid] < PENUMBRA) cellSus[gi - grid] = PENUMBRA;
+      if (r < grid - 1 && cellSus[gi + grid] < PENUMBRA) cellSus[gi + grid] = PENUMBRA;
+      if (c > 0 && cellSus[gi - 1] < PENUMBRA) cellSus[gi - 1] = PENUMBRA;
+      if (c < grid - 1 && cellSus[gi + 1] < PENUMBRA) cellSus[gi + 1] = PENUMBRA;
+    }
+  }
+  const nbytes = Math.ceil((dist.length * 3) / 8);
+  const sus = new Float64Array(nbytes);
+  for (let ci = 0; ci < cellSus.length; ci++){
+    if (cellSus[ci] <= 0) continue;
+    const b0 = (ci * 3) >> 3, b1 = (ci * 3 + 2) >> 3;
+    if (cellSus[ci] > sus[b0]) sus[b0] = cellSus[ci];
+    if (b1 !== b0 && cellSus[ci] > sus[b1]) sus[b1] = cellSus[ci];
+  }
+  return sus;
+}
 
 /** Variantes de paridad a probar para un grid dado al descifrar (no se sabe de
  * antemano si el cubo se generó con "alta corrección"): el nivel Pro admite la
@@ -702,27 +768,46 @@ export function decodeCanonicalFaces(canonByFace, tiers){
   // Modos de color, del PROBADO al más tolerante. 'mean' es exactamente la lectura
   // congelada que siempre funcionó para hojas/pantalla pixel-perfect, así que va
   // primero y descifra al instante un cubo bien capturado. 'median' es robusta a
-  // reflejo parcial; 'cluster' tolera la curva de tono no lineal de cámaras.
+  // reflejo parcial; 'cluster' tolera la curva de tono no lineal de cámaras. Para
+  // mean/median se calcula además la distancia² de cada celda a su color (sospecha
+  // para BORRONES); cluster no la usa.
   const sampleByMode = (mode, grid) => {
-    if (mode === 'cluster') return clusterClassifyTiles(tiles, grid);
-    const fn = mode === 'median' ? sampleFaceCellsRobust : sampleFaceCells;
-    return tiles.map(c => fn(c, grid));
+    if (mode === 'cluster') return { cells: clusterClassifyTiles(tiles, grid), dist: null };
+    const fn = mode === 'median' ? sampleFaceCellsRGBRobust : sampleFaceCellsRGB;
+    const cells = [], dist = [];
+    for (const c of tiles){ const cd = classifyWithDistance(fn(c, grid)); cells.push(cd.idx); dist.push(cd.dist); }
+    return { cells, dist };
   };
   for (const phase of ['identity', 'permute']){
     for (const mode of ['mean', 'median', 'cluster']){
       for (const tierKey of Object.keys(tiers)){
-        const grid = tiers[tierKey].grid;
-        let tileCells;
-        try{ tileCells = sampleByMode(mode, grid); } catch(_){ continue; }
+        const grid = tiers[tierKey].grid, cap = capacityBytesForGrid(grid);
+        let sampled;
+        try{ sampled = sampleByMode(mode, grid); } catch(_){ continue; }
         for (const perm of (phase === 'identity' ? [[0, 1, 2, 3, 4, 5]] : candidatePermutations(FACE_COUNT))){
           if (phase === 'permute' && perm.every((v, i) => v === i)) continue; // ya probada en fase identity
-          const facesByIndex = {};
-          for (let f = 0; f < FACE_COUNT; f++) facesByIndex[f] = tileCells[perm[f]];
+          const indices = [], distArr = sampled.dist ? [] : null;
+          for (let f = 0; f < FACE_COUNT; f++){
+            for (const v of sampled.cells[perm[f]]) indices.push(v);
+            if (distArr) for (const d of sampled.dist[perm[f]]) distArr.push(d);
+          }
+          let raw; try{ raw = colorIndicesToPayload(indices, cap); } catch(_){ continue; }
+          const byteSus = distArr ? byteSuspicionFromCellDist(distArr, grid) : null;
           for (const parity of parityCandidatesForGrid(grid)){
+            // 1) Corrección ciega (probada, instantánea para un cubo bien capturado).
             try{
-              const { payload, totalCorrected } = facesToPayload(facesByIndex, grid, parity);
+              const { payload, totalCorrected } = rsDecodeRawToPayload(raw, grid, parity);
               return { payload, totalCorrected, grid, tier: tierKey, parity };
-            } catch(_){ /* prueba la siguiente paridad / permutación / capacidad */ }
+            } catch(_){ /* la ciega no pudo; abajo se prueban BORRONES */ }
+            // 2) BORRONES: recupera defectos LOCALIZADOS (un reflejo en una cara que
+            //    revienta varias celdas juntas) que la ciega no alcanza. Solo con la
+            //    asignación identidad (lo común) y modos con distancia, para acotar coste.
+            if (byteSus && phase === 'identity'){
+              try{
+                const { payload, totalCorrected } = rsDecodeRawWithErasures(raw, grid, parity, byteSus);
+                return { payload, totalCorrected, grid, tier: tierKey, parity };
+              } catch(_){ /* siguiente paridad / capacidad */ }
+            }
           }
         }
       }
