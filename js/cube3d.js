@@ -209,7 +209,7 @@ const DETECT_SHRINKS = [1, 0.97, 0.94, 0.91, 0.88, 0.85];
 // mucho más fácil; el giro residual exacto lo corrige refineTileCorners después,
 // así que `rotation` sigue siendo el múltiplo de 90° (k). Se prueba 0° primero
 // para que un encuadre recto retorne de inmediato (coste casi nulo en ese caso).
-const DETECT_FINE_DEG = [0, -5, 5, -10, 10];
+const DETECT_FINE_DEG = [0, -6, 6];
 
 export function detectTile(data, w, h, corners){
   const sample = makeSampler(data, w, h, corners);
@@ -699,15 +699,21 @@ export function decodeCanonicalFaces(canonByFace, tiers){
     if (!canonByFace[f]) throw new Error(`Falta la cara ${f + 1} de ${FACE_COUNT}.`);
     tiles.push(canonByFace[f]);
   }
+  // Modos de color, del PROBADO al más tolerante. 'mean' es exactamente la lectura
+  // congelada que siempre funcionó para hojas/pantalla pixel-perfect, así que va
+  // primero y descifra al instante un cubo bien capturado. 'median' es robusta a
+  // reflejo parcial; 'cluster' tolera la curva de tono no lineal de cámaras.
+  const sampleByMode = (mode, grid) => {
+    if (mode === 'cluster') return clusterClassifyTiles(tiles, grid);
+    const fn = mode === 'median' ? sampleFaceCellsRobust : sampleFaceCells;
+    return tiles.map(c => fn(c, grid));
+  };
   for (const phase of ['identity', 'permute']){
-    for (const adaptive of [false, true]){
+    for (const mode of ['mean', 'median', 'cluster']){
       for (const tierKey of Object.keys(tiers)){
         const grid = tiers[tierKey].grid;
         let tileCells;
-        try{
-          tileCells = adaptive ? clusterClassifyTiles(tiles, grid)
-                               : tiles.map(c => sampleFaceCellsRobust(c, grid));
-        } catch(_){ continue; }
+        try{ tileCells = sampleByMode(mode, grid); } catch(_){ continue; }
         for (const perm of (phase === 'identity' ? [[0, 1, 2, 3, 4, 5]] : candidatePermutations(FACE_COUNT))){
           if (phase === 'permute' && perm.every((v, i) => v === i)) continue; // ya probada en fase identity
           const facesByIndex = {};

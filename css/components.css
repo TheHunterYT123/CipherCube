@@ -135,6 +135,12 @@
   background:rgba(255,255,255,.22);overflow:hidden;opacity:0;transition:opacity .15s ease;}
 .scan-locking .scan-lockbar{opacity:1;}
 .scan-lockbar>i{display:block;height:100%;width:0;background:#39c5ff;border-radius:999px;transition:width .12s linear;}
+/* Panel de diagnóstico de escaneo (aparece al fallar el descifrado). */
+.scan-diag{margin-top:14px;padding:12px;border:1px solid var(--color-border);border-radius:10px;background:var(--color-surface);}
+.scan-diag.hidden{display:none;}
+.scan-diag-note{font-size:12px;color:var(--color-text-secondary);margin-bottom:8px;line-height:1.4;}
+.scan-diag-img{display:block;width:100%;max-width:520px;border-radius:8px;border:1px solid var(--color-border);margin:0 auto 10px;}
+.scan-diag-dl{display:inline-block;text-decoration:none;text-align:center;cursor:pointer;}
 /* Mensaje de estado: fuera del visor (debajo), para no tapar las esquinas. */
 .scan-status{margin:10px 0 4px;text-align:center;font-size:12px;font-weight:600;color:var(--color-text);
   background:var(--color-surface);border:1px solid var(--color-border);border-radius:10px;padding:9px 12px;line-height:1.35;}

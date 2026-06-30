@@ -16,15 +16,14 @@
 import {
   FACE_LABELS, FACE_ORDER, TIERS, tryDecryptPayload, parseDecodedPayload, dataUrlForFileEntry,
 } from './crypto.js';
-import { detectTile, warpToCanonical, refineTileCorners, readCanonicalFaceId, decodeCanonicalFaces, combineCanonicalFrames, FACE_COUNT } from './cube3d.js';
+import { detectTile, warpToCanonical, refineTileCorners, readCanonicalFaceId, decodeCanonicalFaces, diagnoseCanonicalFaces, dataSampleBoxes, FACE_COUNT } from './cube3d.js';
 import { showToast, showError } from './ui.js';
 
 const SAMPLE_SIZE = 720;        // lado del lienzo cuadrado de muestreo (más px/celda en Pro)
 const GUIDE_INSET = 0.09;       // margen de la guía (coincide con el CSS .scan-frame)
-const BURST_TARGET = 6;         // cuadros a combinar por cara (≈0.5s a mano)
-const DETECT_EVERY_MS = 80;     // periodicidad de detección (antes 110: ahora agarra más rápido)
-const BURST_MAX_MISS = 6;       // cuadros sin detección tolerados sin perder la ráfaga (mal pulso)
-const OTHER_SWITCH = 2;         // una cara distinta vista N veces seguidas = es otra cara, no flicker
+const STABLE_NEEDED = 2;        // detecciones estables antes de capturar (rápido pero no por un cuadro suelto)
+const DETECT_EVERY_MS = 70;     // periodicidad de detección (rápida: que "agarre" al instante)
+const STABLE_MAX_MISS = 5;      // cuadros sin detección tolerados sin reiniciar la cuenta (mal pulso)
 const ROTATE_PAUSE_MS = 1300;   // pausa con animación "gira el cubo"
 
 function guideCorners(){
@@ -57,12 +56,15 @@ export function createLiveScanner(config){
   let running = false;
   let paused = false;
   let lastDetect = 0;
-  // Ráfaga multi-frame en curso (o null). Acumula varios cuadros enderezados de la
-  // misma cara para combinarlos: tolera reflejos (el brillo se mueve con el pulso)
-  // y mal pulso (no se pierde por un cuadro borroso suelto).
-  let burst = null; // { face, canons:[], miss, other, otherCount }
+  // Seguimiento de estabilidad para captura de UN solo cuadro (lo fiable). La
+  // detección barata (detectTile) cuenta estabilidad; al alcanzarla se endereza el
+  // cuadro y solo se captura si pasa la COMPUERTA de calidad (readCanonicalFaceId
+  // sobre la baldosa ya enderezada): así un encuadre torcido o borroso no se
+  // captura como basura. Tolera cuadros perdidos para no desesperar con mal pulso.
+  let stableFace = -1, stableCount = 0, stableMiss = 0;
   let lockBar = null;
   let captured = {};
+  let lastDiagnosticUrl = null;
 
   function setStatus(text){ if (els.status) els.status.textContent = text; }
 
@@ -143,20 +145,20 @@ export function createLiveScanner(config){
     return warpToCanonical(img.data, SAMPLE_SIZE, SAMPLE_SIZE, corners, detection.rotation);
   }
 
-  /** Combina los cuadros de la ráfaga y guarda la cara. La identidad DEFINITIVA se
-   * relee de la baldosa ya combinada/enderezada (readCanonicalFaceId): es mucho más
-   * fiable que la lectura por cuadro de detectTile, que se equivoca de cara con un
-   * giro residual de la mano. Si aun así no se ve el patrón, se conserva la cara que
-   * dio la detección. El descifrado final reordena las caras por Reed-Solomon, así
-   * que una etiqueta de cara equivocada deja de ser fatal. */
-  function finalizeBurst(canons, fallbackFace){
+  function resetStable(){ stableFace = -1; stableCount = 0; stableMiss = 0; }
+
+  /** Guarda UN cuadro ya enderezado como una cara. La identidad se lee de la propia
+   * baldosa enderezada (readCanonicalFaceId), fiable porque las marcas caen en su
+   * sitio; si no se ve el patrón, se conserva la cara que dio la detección. El
+   * descifrado final reordena las caras por Reed-Solomon, así que una etiqueta
+   * equivocada no es fatal. */
+  function finalizeCapture(canon, fallbackFace){
     setLock(false, 0);
-    const canon = combineCanonicalFrames(canons);
+    resetStable();
     const idInfo = readCanonicalFaceId(canon);
     const faceIndex = idInfo.ok ? idInfo.faceIndex : fallbackFace;
     const isNew = !captured[faceIndex];
     captured[faceIndex] = canon;
-    burst = null;
     flash();
     playCaptureAnimation();
     renderProgress();
@@ -194,37 +196,32 @@ export function createLiveScanner(config){
 
     const det = tryDetectFrame();
     if (!det.ok){
-      // No se ve cara. Si hay ráfaga en curso, tolera varios cuadros perdidos (mal
-      // pulso / desenfoque momentáneo) antes de descartarla.
-      if (burst){
-        if (++burst.miss > BURST_MAX_MISS){ burst = null; setLock(false, 0); setStatus('Centra una cara del cubo en el recuadro.'); }
-        else setStatus(`Fijando cara… mantén firme (${burst.canons.length}/${BURST_TARGET})`);
+      // No se ve cara. Tolera varios cuadros perdidos sin reiniciar la cuenta (mal
+      // pulso / desenfoque momentáneo): así no se "desespera" el usuario.
+      if (stableCount > 0 && ++stableMiss <= STABLE_MAX_MISS){
+        setStatus(`Fijando cara… mantén firme (${Math.min(stableCount, STABLE_NEEDED)}/${STABLE_NEEDED})`);
       } else {
-        setStatus('Centra una cara del cubo en el recuadro.');
+        resetStable(); setLock(false, 0); setStatus('Centra una cara del cubo en el recuadro.');
       }
       return;
     }
-    // Hay una cara detectada. NO se rechaza por la etiqueta de detección (poco
-    // fiable): se acumula y al final se relee la cara de la canónica combinada.
-    if (!burst){
-      burst = { face: det.faceIndex, canons: [warpCurrentFrame(det)], miss: 0, other: -1, otherCount: 0, rotation: det.rotation };
-    } else if (det.faceIndex === burst.face){
-      burst.miss = 0; burst.other = -1; burst.otherCount = 0;
-      burst.canons.push(warpCurrentFrame(det));
-    } else {
-      // Etiqueta distinta a la de la ráfaga: ¿flicker de detección o de verdad es
-      // otra cara (el usuario ya giró el cubo)? Solo se cambia si persiste.
-      if (det.faceIndex === burst.other) burst.otherCount++; else { burst.other = det.faceIndex; burst.otherCount = 1; }
-      if (burst.otherCount >= OTHER_SWITCH){
-        burst = { face: det.faceIndex, canons: [warpCurrentFrame(det)], miss: 0, other: -1, otherCount: 0, rotation: det.rotation };
-      }
-      // si es solo flicker, se ignora este cuadro (no se añade ni se descarta)
+    stableMiss = 0;
+    if (det.faceIndex === stableFace) stableCount++; else { stableFace = det.faceIndex; stableCount = 1; }
+    setLock(true, stableCount / STABLE_NEEDED);
+    setStatus(`Fijando cara… mantén firme (${Math.min(stableCount, STABLE_NEEDED)}/${STABLE_NEEDED})`);
+    if (stableCount < STABLE_NEEDED) return;
+
+    // Estable: endereza ESTE cuadro y solo captura si la baldosa enderezada se lee
+    // limpia (COMPUERTA de calidad). Esto evita capturar encuadres torcidos/borrosos
+    // como basura — la causa de que "ya no descifre".
+    const canon = warpCurrentFrame(det);
+    if (!readCanonicalFaceId(canon).ok){
+      // El cuadro entró torcido/borroso: no captura, pide enderezar y reintenta.
+      stableCount = 1;
+      setStatus('Mantén la cara recta y bien centrada…');
+      return;
     }
-    if (burst){
-      setLock(true, burst.canons.length / BURST_TARGET);
-      setStatus(`Fijando cara… mantén firme (${burst.canons.length}/${BURST_TARGET})`);
-      if (burst.canons.length >= BURST_TARGET) finalizeBurst(burst.canons, burst.face);
-    }
+    finalizeCapture(canon, det.faceIndex);
   }
 
   async function start(){
@@ -281,12 +278,67 @@ export function createLiveScanner(config){
 
   function resetScan(){
     captured = {};
-    burst = null; paused = false;
+    resetStable(); paused = false;
     setLock(false, 0);
     if (els.output) els.output.classList.add('hidden');
+    if (els.diag) els.diag.classList.add('hidden');
     if (els.pass) els.pass.value = '';
     renderProgress();
     setStatus(running ? 'Centra una cara del cubo en el recuadro.' : 'Cámara detenida.');
+  }
+
+  /** Imagen de diagnóstico: las 6 caras ENDEREZADAS (lo que ve el decodificador)
+   * con la rejilla de muestreo magenta encima y, por cara, cuántos bloques
+   * Reed-Solomon quedaron irrecuperables. Mirando esta imagen se distingue al
+   * instante la causa real: si las cajas magenta NO caen centradas en cada cuadro
+   * de color = desalineación; si caen centradas pero los colores se ven apagados o
+   * cambiados = color/luz; si una cara sale torcida o recortada = captura. */
+  function buildDiagnosticDataURL(){
+    let report = null;
+    try{ report = diagnoseCanonicalFaces({ ...captured }, TIERS); } catch(_){ /* sin reporte */ }
+    const grid = report ? report.grid : 24;
+    const boxes = dataSampleBoxes(grid);
+    const TILE = 240, PAD = 12, COLS = 3, ROWS = 2, HEAD = 64, FOOT = 22;
+    const W = PAD + COLS * (TILE + PAD), H = HEAD + ROWS * (TILE + PAD + FOOT);
+    const cv = document.createElement('canvas'); cv.width = W; cv.height = H;
+    const ctx = cv.getContext('2d');
+    ctx.fillStyle = '#111'; ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = '#fff'; ctx.textBaseline = 'top'; ctx.font = '600 15px sans-serif';
+    ctx.fillText(`Diagnóstico — capacidad ${report ? report.tier : '?'} (grid ${grid}) · bloques mal: ${report ? report.failedBlocks + '/' + report.numBlocks : '?'}`, PAD, 12);
+    ctx.font = '12px sans-serif'; ctx.fillStyle = '#bbb';
+    ctx.fillText('Magenta = dónde se lee el color de cada celda. Si NO cae centrado en cada cuadro → desalineación.', PAD, 34);
+    for (let f = 0; f < FACE_COUNT; f++){
+      const col = f % COLS, row = (f / COLS) | 0;
+      const x = PAD + col * (TILE + PAD), y = HEAD + row * (TILE + PAD + FOOT);
+      const canon = captured[f];
+      if (canon){
+        const tc = document.createElement('canvas'); tc.width = canon.size; tc.height = canon.size;
+        tc.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(canon.data), canon.size, canon.size), 0, 0);
+        ctx.drawImage(tc, x, y, TILE, TILE);
+        ctx.strokeStyle = 'rgba(255,0,255,0.55)'; ctx.lineWidth = 1;
+        ctx.beginPath();
+        for (const b of boxes){ ctx.rect(x + b.x * TILE, y + b.y * TILE, b.w * TILE, b.h * TILE); }
+        ctx.stroke();
+      } else { ctx.fillStyle = '#400'; ctx.fillRect(x, y, TILE, TILE); }
+      ctx.fillStyle = '#fff'; ctx.font = '600 12px sans-serif';
+      const fail = report ? report.perFaceFailed[f] : '?', tot = report ? report.perFaceTotal[f] : '?';
+      ctx.fillText(`cara ${f + 1}: ${fail}/${tot} bloques mal`, x, y + TILE + 4);
+    }
+    return cv.toDataURL('image/png');
+  }
+
+  function showDiagnostic(){
+    if (!els.diag) return;
+    let url; try{ url = buildDiagnosticDataURL(); } catch(_){ return; }
+    lastDiagnosticUrl = url;
+    els.diag.innerHTML = '';
+    const p = document.createElement('div'); p.className = 'scan-diag-note';
+    p.textContent = 'No se pudo descifrar. Descarga esta imagen y envíasela al desarrollador: muestra exactamente lo que ve el escáner.';
+    const img = document.createElement('img'); img.src = url; img.className = 'scan-diag-img';
+    const a = document.createElement('a'); a.href = url; a.download = 'ciphercube-diagnostico.png';
+    a.textContent = '⬇ Descargar diagnóstico'; a.className = 'btn-secondary scan-diag-dl';
+    els.diag.appendChild(p); els.diag.appendChild(img); els.diag.appendChild(a);
+    els.diag.classList.remove('hidden');
   }
 
   async function runAction(){
@@ -294,12 +346,16 @@ export function createLiveScanner(config){
     const pass = els.pass ? els.pass.value : null;
     if (requiresPass && !pass){ showError('Escribe tu frase.'); return; }
     const btn = els.actionBtn;
+    if (els.diag) els.diag.classList.add('hidden');
     btn.disabled = true; btn.innerHTML = `<span class="spinner"></span> ${config.busyLabel || 'Procesando…'}`;
     try{
       await config.onAction({ ...captured }, { pass });
       if (config.resetAfterAction) resetScan();
     } catch(e){
       showError(e.message);
+      // Diagnóstico visual SOLO para el escáner del cubo (decode Reed-Solomon): así
+      // el usuario puede mandar una imagen de lo que ve el escáner y ver la causa.
+      if (config.diagnostic) showDiagnostic();
     } finally {
       btn.disabled = false;
       renderProgress();
@@ -335,19 +391,20 @@ export function createLiveScanner(config){
       wrap.className = 'scan-lockbar'; wrap.appendChild(lockBar);
       els.viewfinder.appendChild(wrap);
     }
+    // Contenedor del diagnóstico (solo se llena/visualiza al fallar el descifrado).
+    if (config.diagnostic && els.actionBtn){
+      els.diag = document.createElement('div');
+      els.diag.className = 'scan-diag hidden';
+      els.actionBtn.parentNode.insertBefore(els.diag, els.actionBtn.nextSibling);
+    }
 
     els.captureBtn.addEventListener('click', () => {
       if (!running){ showError('La cámara no está activa.'); return; }
       const det = tryDetectFrame();
-      if (!det.ok && !burst){ showToast('No veo una cara válida; acércala y céntrala.'); return; }
-      // Captura inmediata: aprovecha la ráfaga ya acumulada (mejor calidad) y le
-      // suma el cuadro actual si hay una cara detectada ahora mismo.
+      if (!det.ok){ showToast('No veo una cara válida; acércala y céntrala.'); return; }
+      // Captura forzada del cuadro actual (escape para impacientes), sin compuerta.
       paused = false;
-      const canons = burst ? burst.canons.slice() : [];
-      const face = burst ? burst.face : det.faceIndex;
-      if (det.ok) canons.push(warpCurrentFrame(det));
-      if (!canons.length){ showToast('No veo una cara válida; acércala y céntrala.'); return; }
-      finalizeBurst(canons, face);
+      finalizeCapture(warpCurrentFrame(det), det.faceIndex);
     });
     els.resetBtn.addEventListener('click', resetScan);
     els.actionBtn.addEventListener('click', runAction);
@@ -399,6 +456,7 @@ const cubeScanner = createLiveScanner({
   labelComplete: 'Descifrar',
   labelIncomplete: n => `Descifrar (faltan ${n})`,
   resetAfterAction: false,
+  diagnostic: true,
   onAction: async (canonByFace, { pass }) => {
     const { payload } = decodeCanonicalFaces(canonByFace, TIERS);
     const result = await tryDecryptPayload(payload, pass);
