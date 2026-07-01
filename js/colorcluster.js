@@ -122,11 +122,14 @@ const KMEANS_RESTARTS = 5;
 const KMEANS_ITERS = 30;
 
 /**
- * Clasifica las celdas por clustering global + etiquetado estructural.
+ * Ajusta el modelo adaptativo (centroides k-means + mapeo estructural a paleta)
+ * sobre las celdas observadas. Separado de la clasificación para poder REUTILIZAR
+ * el modelo con muestreos alternativos de las mismas caras (p. ej. la rejilla
+ * micro-desplazada del modo anti-moiré) sin pagar otro k-means.
  * @param facesRgb array de caras; cada cara es un array de [r,g,b] ya calibrados.
- * @returns array de caras; cada cara es un array de índices de paleta (0..7).
+ * @returns { cent, map } — centroides (8×[r,g,b]) y map[clusterIdx] = paletteIdx.
  */
-export function classifyCellsAdaptive(facesRgb){
+export function fitAdaptiveModel(facesRgb){
   const all = [];
   for (const face of facesRgb) for (const rgb of face) all.push(rgb);
   if (all.length < 8) throw new Error('Muy pocas celdas para clasificar por color.');
@@ -149,16 +152,31 @@ export function classifyCellsAdaptive(facesRgb){
     if (inertia < bestInertia){ bestInertia = inertia; bestCent = cent; }
   }
 
-  const map = labelClusters(bestCent);
+  return { cent: bestCent, map: labelClusters(bestCent) };
+}
+
+/** Clasifica celdas contra un modelo ya ajustado (celda → centroide más cercano →
+ * índice de paleta). Mismo formato de entrada/salida que classifyCellsAdaptive. */
+export function classifyWithModel(facesRgb, model){
+  const { cent, map } = model;
   const out = [];
   for (const face of facesRgb){
     const arr = new Array(face.length);
     for (let i = 0; i < face.length; i++){
       const p = face[i]; let best = 0, bd = Infinity;
-      for (let c = 0; c < 8; c++){ const ct = bestCent[c]; const d = (ct[0]-p[0])**2+(ct[1]-p[1])**2+(ct[2]-p[2])**2; if (d < bd){ bd = d; best = c; } }
+      for (let c = 0; c < 8; c++){ const ct = cent[c]; const d = (ct[0]-p[0])**2+(ct[1]-p[1])**2+(ct[2]-p[2])**2; if (d < bd){ bd = d; best = c; } }
       arr[i] = map[best];
     }
     out.push(arr);
   }
   return out;
+}
+
+/**
+ * Clasifica las celdas por clustering global + etiquetado estructural.
+ * @param facesRgb array de caras; cada cara es un array de [r,g,b] ya calibrados.
+ * @returns array de caras; cada cara es un array de índices de paleta (0..7).
+ */
+export function classifyCellsAdaptive(facesRgb){
+  return classifyWithModel(facesRgb, fitAdaptiveModel(facesRgb));
 }

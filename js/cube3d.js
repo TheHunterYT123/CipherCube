@@ -19,7 +19,7 @@ import {
   nearestPaletteIndex, hexToRgb, computeHomography, applyHomography,
   rsDecodeBlock, effectiveCapacityForGrid, RS_N, RS_K, RS_PARITY, RS_PARITY_HIGH,
 } from './crypto.js';
-import { classifyCellsAdaptive } from './colorcluster.js';
+import { classifyCellsAdaptive, fitAdaptiveModel, classifyWithModel } from './colorcluster.js';
 
 const PAL_RGB = PALETTE.map(hexToRgb);
 /** Clasifica cada celda (RGB calibrado) a su índice de paleta y devuelve TAMBIÉN
@@ -619,11 +619,15 @@ const BLACK_TARGET = 10;
  * tinte de luz, exposición y el negro elevado de la cámara mucho mejor que solo
  * ganancia de blanco; en hojas exportadas pixel-perfect (negro≈10, blanco≈255) la
  * transformación es la identidad, así que ese camino no cambia. */
-function sampleFaceCellsRGBWith(canon, grid, cellSampler){
+function sampleFaceCellsRGBWith(canon, grid, cellSampler, geom){
   const { data, size } = canon;
   const dataSpan = 1 - 2 * DI;
   const cellN = dataSpan / grid;
-  const half = cellN * 0.22;
+  // Geometría opcional: `half` = medio-lado de la caja como fracción de celda
+  // (default 0.22, el probado); `ox`/`oy` = desplazamiento del centro de muestreo
+  // en fracción de celda (para los modos anti-moiré que esquivan interferencia).
+  const half = cellN * ((geom && geom.half) || 0.22);
+  const ox = (geom && geom.ox) || 0, oy = (geom && geom.oy) || 0;
   const white = canonWhiteRef(data, size);
   const black = canonBlackRef(data, size);
   // Solo calibrar si las referencias son sanas: blanco claro y separado del negro.
@@ -634,7 +638,7 @@ function sampleFaceCellsRGBWith(canon, grid, cellSampler){
   let idx = 0;
   for (let r = 0; r < grid; r++){
     for (let c = 0; c < grid; c++){
-      const nx = DI + (c + 0.5) * cellN, ny = DI + (r + 0.5) * cellN;
+      const nx = DI + (c + 0.5 + ox) * cellN, ny = DI + (r + 0.5 + oy) * cellN;
       let rgb = cellSampler(data, size, nx, ny, half);
       if (calibrate){
         rgb = rgb.map((v, ch) => {
@@ -648,6 +652,13 @@ function sampleFaceCellsRGBWith(canon, grid, cellSampler){
   return cells;
 }
 export function sampleFaceCellsRGB(canon, grid){ return sampleFaceCellsRGBWith(canon, grid, avgCanonRegion); }
+
+/** Muestreo ANCHO anti-moiré: caja del 60% de la celda (media aritmética), con la
+ * rejilla opcionalmente micro-desplazada ox/oy (fracción de celda). Lo usan los
+ * modos 'cw*' de decodeCanonicalFaces para escaneos desde pantalla con moiré. */
+export function sampleFaceCellsRGBWide(canon, grid, ox = 0, oy = 0){
+  return sampleFaceCellsRGBWith(canon, grid, avgCanonRegion, { half: 0.30, ox, oy });
+}
 
 /** Igual que sampleFaceCellsRGB pero con MEDIANA por celda (tolerante a reflejos).
  * Idéntica a la media en celdas limpias/uniformes, así que no cambia la lectura de
@@ -816,15 +827,81 @@ export function decodeCanonicalFaces(canonByFace, tiers, opts = {}){
   // reflejo parcial; 'cluster' tolera la curva de tono no lineal de cámaras. Para
   // mean/median se calcula además la distancia² de cada celda a su color (sospecha
   // para BORRONES); cluster no la usa.
+  //
+  // Modos ANCHOS anti-moiré (medidos sobre el escaneo real de una PANTALLA,
+  // diagnóstico del usuario 2026-07-01): el moiré del pixelado del monitor mete
+  // ruido de color disperso que la caja probada (22% de celda) no promedia — 8/32
+  // bloques irrecuperables, inmunes a borrones (>6 bytes/bloque) y al clustering.
+  //  · 'cw': caja ANCHA (30% de celda, media aritmética) + clustering. Promedia la
+  //    interferencia: 8/32 → 1/32 bloques malos en el escaneo real.
+  //  · 'cwfix': reparación DIRIGIDA del residuo. La fase del moiré que cae justo en
+  //    el centro de las celdas se esquiva re-muestreando con la rejilla micro-
+  //    desplazada ±8% de celda, pero SOLO en la(s) cara(s) cuyos bloques fallan:
+  //    aplicado a todas las caras, el mismo desplazamiento arregla una y rompe otra
+  //    (medido). Con esto el escaneo real queda 0/32 → descifra.
+  // El modelo de clustering se ajusta UNA vez por grid (en 'cw') y 'cwfix' lo
+  // reutiliza: solo paga re-muestreos. Van al final: solo corren si todo lo
+  // probado falló, así que el caso limpio no cambia ni se paga nada nuevo.
+  const WIDE_OFFSETS = [[0.08, 0], [-0.08, 0], [0, 0.08], [0, -0.08]];
+  const COLOR_MODES = ['mean', 'median', 'cluster', 'cw', 'cwfix'];
+  const wideModelByGrid = {};
+  const sampleCache = new Map(); // `${mode}:${grid}` → resultado (evita repetir k-means en fase permute)
+  /** Índices de los bloques RS que no validan para estas celdas (paridad base). */
+  const badBlocks = (cellsList, grid, parity) => {
+    const facesByIndex = {};
+    cellsList.forEach((v, f) => { facesByIndex[f] = v; });
+    let raw;
+    try{ raw = colorIndicesToPayload(assembleFaces(facesByIndex, grid), capacityBytesForGrid(grid)); }
+    catch(_){ return null; }
+    const { numBlocks, k } = effectiveCapacityForGrid(grid, parity);
+    const bad = [];
+    for (let i = 0; i < numBlocks; i++){
+      if (!rsDecodeBlock(raw.slice(i * RS_N, (i + 1) * RS_N), k, parity).success) bad.push(i);
+    }
+    return bad;
+  };
   const sampleByMode = (mode, grid) => {
-    if (mode === 'cluster') return { cells: clusterClassifyTiles(tiles, grid), dist: null };
-    const fn = mode === 'median' ? sampleFaceCellsRGBRobust : sampleFaceCellsRGB;
-    const cells = [], dist = [];
-    for (const c of tiles){ const cd = classifyWithDistance(fn(c, grid)); cells.push(cd.idx); dist.push(cd.dist); }
-    return { cells, dist };
+    const key = `${mode}:${grid}`;
+    if (sampleCache.has(key)) return sampleCache.get(key);
+    let out;
+    if (mode === 'cluster') out = { cells: clusterClassifyTiles(tiles, grid), dist: null };
+    else if (mode === 'cw'){
+      const facesRgb = tiles.map(c => sampleFaceCellsRGBWide(c, grid));
+      if (!wideModelByGrid[grid]) wideModelByGrid[grid] = fitAdaptiveModel(facesRgb);
+      out = { cells: classifyWithModel(facesRgb, wideModelByGrid[grid]), dist: null };
+    } else if (mode === 'cwfix'){
+      const base = sampleByMode('cw', grid);
+      const parity0 = parityCandidatesForGrid(grid)[0];
+      const bad0 = badBlocks(base.cells, grid, parity0);
+      if (!bad0 || !bad0.length) out = base; // sin residuo que reparar (o ilegible)
+      else {
+        const model = wideModelByGrid[grid];
+        const cells = base.cells.slice();
+        for (const f of new Set(bad0.map(i => blockFaceIndex(i, grid)))){
+          let bestCells = null;
+          let bestBad = bad0.filter(i => blockFaceIndex(i, grid) === f).length;
+          for (const [ox, oy] of WIDE_OFFSETS){
+            const labels = classifyWithModel([sampleFaceCellsRGBWide(tiles[f], grid, ox, oy)], model)[0];
+            const trial = cells.slice(); trial[f] = labels;
+            const nb = badBlocks(trial, grid, parity0);
+            const nf = nb ? nb.filter(i => blockFaceIndex(i, grid) === f).length : Infinity;
+            if (nf < bestBad){ bestBad = nf; bestCells = labels; if (nf === 0) break; }
+          }
+          if (bestCells) cells[f] = bestCells;
+        }
+        out = { cells, dist: null };
+      }
+    } else {
+      const fn = mode === 'median' ? sampleFaceCellsRGBRobust : sampleFaceCellsRGB;
+      const cells = [], dist = [];
+      for (const c of tiles){ const cd = classifyWithDistance(fn(c, grid)); cells.push(cd.idx); dist.push(cd.dist); }
+      out = { cells, dist };
+    }
+    sampleCache.set(key, out);
+    return out;
   };
   for (const phase of phases){
-    for (const mode of ['mean', 'median', 'cluster']){
+    for (const mode of COLOR_MODES){
       for (const tierKey of Object.keys(tiers)){
         const grid = tiers[tierKey].grid, cap = capacityBytesForGrid(grid);
         let sampled;
