@@ -126,6 +126,9 @@
 .scan-frame .c3{bottom:0;left:0;border-right:none;border-top:none;border-radius:0 0 0 6px;}
 .scan-frame .c4{bottom:0;right:0;border-left:none;border-top:none;border-radius:0 0 6px 0;}
 .scan-done .scan-frame .corner{border-color:#33d17a;}
+/* Escaneo verificado (cubo reconstruido sin frase): confirmación verde. */
+.scan-verified .scan-frame .corner{border-color:#33d17a;}
+.scan-verified{box-shadow:0 0 0 2px rgba(51,209,122,.55) inset;}
 /* "Fijando cara": mientras se acumula la ráfaga multi-frame las esquinas laten en
    cian, para que se vea que SÍ está agarrando (clave para pulso tembloroso). */
 .scan-locking .scan-frame .corner{border-color:#39c5ff;animation:scanLockPulse .55s ease-in-out infinite;}

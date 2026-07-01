@@ -685,6 +685,38 @@ export function readCanonicalFaceId(canon){
   return { ok: true, faceIndex };
 }
 
+// Compuerta de reflejo al capturar una cara. Un reflejo especular de luz revienta
+// a BLANCO un blob de píxeles de la cara; las celdas de datos nunca son blanco puro
+// (el color más claro, el amarillo #F0E442, es muy saturado: max-min grande), así
+// que "muy claro + poca saturación" delata reflejo, no dato. Umbral conservador:
+// afínese con el dispositivo real si hiciera falta. GLARE_MARGIN aleja la medición
+// del borde de la zona de datos para no confundir la banda blanca con reflejo.
+const GLARE_LUMA = 245, GLARE_SAT = 26, GLARE_MAX = 0.02, GLARE_MARGIN = 0.02;
+
+/** Calidad de lectura de UNA cara ya enderezada, INDEPENDIENTE del grid (al
+ * capturar aún no se sabe el tier). Mide en la zona de datos [DI,1-DI] la fracción
+ * de píxeles reventados a blanco especular: la firma de un reflejo de luz, la causa
+ * #1 de que una sola cara tumbe el descifrado (RS exige todos los bloques limpios).
+ * Devuelve { ok, glareFrac }. Seguro por diseño: no asume fronteras de celda, así
+ * que no penaliza caras Pro limpias. */
+export function faceScanQuality(canon){
+  const { data, size } = canon;
+  const lo = Math.floor((DI + GLARE_MARGIN) * size);
+  const hi = Math.ceil((1 - DI - GLARE_MARGIN) * size);
+  let glare = 0, total = 0;
+  for (let y = lo; y < hi; y += 2){
+    for (let x = lo; x < hi; x += 2){
+      const i = (y * size + x) * 4;
+      const r = data[i], g = data[i + 1], b = data[i + 2];
+      const l = 0.299 * r + 0.587 * g + 0.114 * b;
+      if (l > GLARE_LUMA && (Math.max(r, g, b) - Math.min(r, g, b)) < GLARE_SAT) glare++;
+      total++;
+    }
+  }
+  const glareFrac = total ? glare / total : 0;
+  return { ok: glareFrac < GLARE_MAX, glareFrac };
+}
+
 /** SOLO DIAGNÓSTICO. Devuelve, para cada celda de datos en orden de lectura, la
  * caja normalizada (0..1 sobre el lienzo canónico) donde el lector toma su color.
  * Sirve para dibujar encima de la cara enderezada y ver si la rejilla cae
@@ -766,7 +798,13 @@ function* candidatePermutations(n){
  * El muestreo de cada baldosa se cachea por (color, capacidad), así que las 720
  * permutaciones solo reordenan celdas ya muestreadas: la fase cara solo se paga
  * cuando de verdad hizo falta. */
-export function decodeCanonicalFaces(canonByFace, tiers){
+export function decodeCanonicalFaces(canonByFace, tiers, opts = {}){
+  // `opts.phases` acota el trabajo. Por defecto prueba identidad y luego permutación
+  // de caras (el fallback caro, ~540 intentos RS). La auto-verificación en vivo pasa
+  // ['identity']: como readCanonicalFaceId ya lee la identidad de cara de forma
+  // fiable sobre la baldosa enderezada, saltarse 'permute' hace la lectura casi
+  // instantánea cuando el problema real es una cara dañada (no una etiqueta cruzada).
+  const phases = opts.phases || ['identity', 'permute'];
   const tiles = [];
   for (let f = 0; f < FACE_COUNT; f++){
     if (!canonByFace[f]) throw new Error(`Falta la cara ${f + 1} de ${FACE_COUNT}.`);
@@ -785,7 +823,7 @@ export function decodeCanonicalFaces(canonByFace, tiers){
     for (const c of tiles){ const cd = classifyWithDistance(fn(c, grid)); cells.push(cd.idx); dist.push(cd.dist); }
     return { cells, dist };
   };
-  for (const phase of ['identity', 'permute']){
+  for (const phase of phases){
     for (const mode of ['mean', 'median', 'cluster']){
       for (const tierKey of Object.keys(tiers)){
         const grid = tiers[tierKey].grid, cap = capacityBytesForGrid(grid);

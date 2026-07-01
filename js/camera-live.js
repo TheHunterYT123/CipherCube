@@ -16,7 +16,7 @@
 import {
   FACE_LABELS, FACE_ORDER, TIERS, tryDecryptPayload, parseDecodedPayload, dataUrlForFileEntry,
 } from './crypto.js';
-import { detectTile, warpToCanonical, refineTileCorners, readCanonicalFaceId, decodeCanonicalFaces, diagnoseCanonicalFaces, dataSampleBoxes, FACE_COUNT } from './cube3d.js';
+import { detectTile, warpToCanonical, refineTileCorners, readCanonicalFaceId, faceScanQuality, decodeCanonicalFaces, diagnoseCanonicalFaces, dataSampleBoxes, FACE_COUNT } from './cube3d.js';
 import { showToast, showError } from './ui.js';
 
 const SAMPLE_SIZE = 720;        // lado del lienzo cuadrado de muestreo (más px/celda en Pro)
@@ -31,6 +31,17 @@ function guideCorners(){
   const e = SAMPLE_SIZE - m;
   return [[m, m], [e, m], [e, e], [m, e]];
 }
+
+// Pistas que rotan cuando no se detecta cara. El cubo FÍSICO (cara borde a borde,
+// sin margen blanco de papel) engancha peor que papel/pantalla; estas guías ayudan
+// a encuadrarlo (punto 1). Rotan ~cada 1.6 s para que se lean sin agobiar.
+const DETECT_HINTS = [
+  'Centra una cara del cubo en el recuadro.',
+  'Acércate hasta llenar el recuadro con la cara.',
+  'Endereza la cara: bordes paralelos al recuadro.',
+  'Evita sombras y reflejos en el borde del cubo.',
+];
+function detectHint(){ return DETECT_HINTS[Math.floor(Date.now() / 1600) % DETECT_HINTS.length]; }
 
 /**
  * Crea un escáner en vivo independiente.
@@ -65,6 +76,12 @@ export function createLiveScanner(config){
   let lockBar = null;
   let captured = {};
   let lastDiagnosticUrl = null;
+  // Auto-verificación: apenas hay 6 caras se reconstruye el cubo (SIN frase) para
+  // saber si el escaneo es bueno. `scanVersion` sube en cada captura/descarte, así
+  // que la reconstrucción cacheada solo se reutiliza si las caras no cambiaron.
+  let scanVersion = 0;
+  let verifying = false, verifyCycles = 0;
+  let lastReconstruction = null, lastVerifiedVersion = -1;
 
   function setStatus(text){ if (els.status) els.status.textContent = text; }
 
@@ -159,17 +176,67 @@ export function createLiveScanner(config){
     const faceIndex = idInfo.ok ? idInfo.faceIndex : fallbackFace;
     const isNew = !captured[faceIndex];
     captured[faceIndex] = canon;
+    scanVersion++; lastReconstruction = null; // las caras cambiaron: invalida la cache
     flash();
     playCaptureAnimation();
     renderProgress();
     if (Object.keys(captured).length === FACE_COUNT){
-      setStatus('¡Listo! 6 caras capturadas.');
       showToast('6 / 6 caras capturadas.');
+      autoVerifyScan();
       return;
     }
     paused = true;
     showRotateHint();
     if (!isNew) showToast('Esa cara ya estaba; muestra una nueva.');
+  }
+
+  /** Con 6 caras, reconstruye el cubo SIN frase para verificar el escaneo (punto:
+   * "que al momento avise"). Éxito → cachea la reconstrucción y, si ya hay frase,
+   * descifra solo; si no, pide la frase. Fallo → aísla la cara peor y la re-pide
+   * (bucle) sin que el usuario tenga que pulsar nada. Diferido para no congelar la
+   * UI durante el decode. Solo actúa si el escáner declara `verifyReconstruction`
+   * (el del cubo); el de partes Shamir conserva el flujo simple. */
+  function autoVerifyScan(){
+    if (!config.verifyReconstruction){ setStatus('¡Listo! 6 caras capturadas.'); return; }
+    if (Object.keys(captured).length < FACE_COUNT || verifying) return;
+    verifying = true; paused = true;
+    setStatus('Leyendo el cubo…');
+    els.actionBtn.disabled = true;
+    els.actionBtn.innerHTML = '<span class="spinner"></span> Leyendo el cubo…';
+    const version = scanVersion;
+    setTimeout(() => {
+      let reconstruction = null;
+      try{ reconstruction = config.verifyReconstruction({ ...captured }); } catch(_){ reconstruction = null; }
+      verifying = false;
+      // Si el usuario cambió algo mientras verificábamos, recalcula.
+      if (version !== scanVersion){
+        paused = false; renderProgress();
+        if (Object.keys(captured).length === FACE_COUNT) autoVerifyScan();
+        return;
+      }
+      if (reconstruction){
+        lastReconstruction = reconstruction; lastVerifiedVersion = version; verifyCycles = 0;
+        onScanVerified();
+        return;
+      }
+      // Reconstrucción fallida: culpa a la cara peor y pídela otra vez (bucle acotado).
+      verifyCycles++;
+      if (verifyCycles <= 3 && dropWorstFaceAndGuide()) return; // deja status + reanuda
+      paused = false; renderProgress();
+      setStatus('No se pudo leer el cubo. Reescanea con más luz y sin reflejos (mira el detalle técnico si sigue fallando).');
+      if (config.diagnostic) showDiagnostic();
+    }, 30);
+  }
+
+  /** El escaneo verificó: reactiva el botón y, si la frase ya está, descifra solo. */
+  function onScanVerified(){
+    paused = false;
+    renderProgress();
+    if (els.viewfinder) els.viewfinder.classList.add('scan-verified');
+    const pass = els.pass ? els.pass.value : null;
+    if (requiresPass && pass){ setStatus('Cubo leído ✓ Descifrando…'); runAction(); }
+    else if (requiresPass){ setStatus('Cubo leído ✓ Escribe tu frase y pulsa Descifrar.'); }
+    else { setStatus('Cubo leído ✓'); }
   }
 
   function tryDetectFrame(){
@@ -201,7 +268,9 @@ export function createLiveScanner(config){
       if (stableCount > 0 && ++stableMiss <= STABLE_MAX_MISS){
         setStatus(`Fijando cara… mantén firme (${Math.min(stableCount, STABLE_NEEDED)}/${STABLE_NEEDED})`);
       } else {
-        resetStable(); setLock(false, 0); setStatus('Centra una cara del cubo en el recuadro.');
+        // Pistas rotativas: el cubo FÍSICO (borde a borde, sin margen blanco) cuesta
+        // más de enganchar que papel/pantalla; guiar el encuadre ayuda (punto 1).
+        resetStable(); setLock(false, 0); setStatus(detectHint());
       }
       return;
     }
@@ -219,6 +288,14 @@ export function createLiveScanner(config){
       // El cuadro entró torcido/borroso: no captura, pide enderezar y reintenta.
       stableCount = 1;
       setStatus('Mantén la cara recta y bien centrada…');
+      return;
+    }
+    // COMPUERTA de reflejo (punto 4 "al momento"): un brillo especular sobre esta
+    // cara reventaría celdas y tumbaría el descifrado. No la captures: pide quitar el
+    // reflejo y reintenta sola. El botón "Capturar ahora" sí puede forzarla.
+    if (!faceScanQuality(canon).ok){
+      stableCount = 1;
+      setStatus('Reflejo en la cara — inclínala para quitar el brillo y muéstrala otra vez.');
       return;
     }
     finalizeCapture(canon, det.faceIndex);
@@ -279,7 +356,10 @@ export function createLiveScanner(config){
   function resetScan(){
     captured = {};
     resetStable(); paused = false;
+    verifying = false; verifyCycles = 0;
+    scanVersion++; lastReconstruction = null; lastVerifiedVersion = -1;
     setLock(false, 0);
+    if (els.viewfinder) els.viewfinder.classList.remove('scan-verified');
     if (els.output) els.output.classList.add('hidden');
     if (els.diag) els.diag.classList.add('hidden');
     if (els.pass) els.pass.value = '';
@@ -335,15 +415,18 @@ export function createLiveScanner(config){
    * nivel Reed-Solomon, pero re-capturar la cara sin luz sí. */
   function dropWorstFaceAndGuide(){
     let rep = null;
-    try{ rep = diagnoseCanonicalFaces({ ...captured }, TIERS); } catch(_){ return; }
-    if (!rep) return;
+    try{ rep = diagnoseCanonicalFaces({ ...captured }, TIERS); } catch(_){ return false; }
+    if (!rep) return false;
     let worst = -1, worstN = 0;
     for (let f = 0; f < FACE_COUNT; f++){ if (rep.perFaceFailed[f] > worstN){ worstN = rep.perFaceFailed[f]; worst = f; } }
-    if (worst < 0 || worstN === 0) return;
+    if (worst < 0 || worstN === 0) return false;
     delete captured[worst];
+    scanVersion++; lastReconstruction = null;
     resetStable(); paused = false;
+    if (els.viewfinder) els.viewfinder.classList.remove('scan-verified');
     renderProgress();
-    setStatus(`La cara ${worst + 1} tiene reflejo o daño. Muéstrala otra vez, inclinándola para que NO le dé la luz; se recaptura sola y luego pulsa Descifrar.`);
+    setStatus(`La cara ${worst + 1} salió con reflejo o daño (${worstN}/${rep.perFaceTotal[worst]} bloques). Muéstrala otra vez, inclinándola para que NO le dé la luz; se recaptura sola y se descifra solo.`);
+    return true;
   }
 
   function showDiagnostic(){
@@ -367,8 +450,11 @@ export function createLiveScanner(config){
     const btn = els.actionBtn;
     if (els.diag) els.diag.classList.add('hidden');
     btn.disabled = true; btn.innerHTML = `<span class="spinner"></span> ${config.busyLabel || 'Procesando…'}`;
+    // Si la auto-verificación ya reconstruyó ESTAS caras, reutiliza el payload:
+    // el descifrado es casi instantáneo (no repite el decode pesado).
+    const reconstruction = (lastReconstruction && lastVerifiedVersion === scanVersion) ? lastReconstruction : null;
     try{
-      await config.onAction({ ...captured }, { pass });
+      await config.onAction({ ...captured }, { pass, reconstruction });
       if (config.resetAfterAction) resetScan();
     } catch(e){
       showError(e.message);
@@ -476,12 +562,24 @@ const cubeScanner = createLiveScanner({
   labelIncomplete: n => `Descifrar (faltan ${n})`,
   resetAfterAction: false,
   diagnostic: true,
-  onAction: async (canonByFace, { pass }) => {
-    let payload;
-    // Marca el fallo de RECONSTRUCCIÓN (escaneo) para distinguirlo de una frase
-    // incorrecta: solo el primero justifica re-escanear una cara.
-    try{ ({ payload } = decodeCanonicalFaces(canonByFace, TIERS)); }
-    catch(e){ e.scanFailed = true; throw e; }
+  // Verificación del escaneo SIN frase (se corre solo al completar las 6 caras). Dos
+  // etapas: primero la rápida 'identity' (la identidad de cara se lee fiable → un cubo
+  // bien capturado verifica casi al instante); si esa falla, el decode COMPLETO con
+  // fallback por permutación, para NO culpar a una cara sana solo por una etiqueta de
+  // cara mal leída. Solo si ambas fallan hay daño real y se re-pide una cara.
+  verifyReconstruction: (canonByFace) => {
+    try{ return decodeCanonicalFaces(canonByFace, TIERS, { phases: ['identity'] }); }
+    catch(_){ return decodeCanonicalFaces(canonByFace, TIERS); }
+  },
+  onAction: async (canonByFace, { pass, reconstruction }) => {
+    let payload = reconstruction && reconstruction.payload;
+    if (!payload){
+      // Sin reconstrucción cacheada: decode completo (permite el fallback por
+      // permutación). Marca el fallo de RECONSTRUCCIÓN (escaneo) para distinguirlo de
+      // una frase incorrecta: solo el primero justifica re-escanear una cara.
+      try{ ({ payload } = decodeCanonicalFaces(canonByFace, TIERS)); }
+      catch(e){ e.scanFailed = true; throw e; }
+    }
     const result = await tryDecryptPayload(payload, pass);
     renderCubeReveal(result.text);
     document.getElementById('liveDecodeOutput').classList.remove('hidden');
