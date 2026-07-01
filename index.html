@@ -110,7 +110,7 @@
             <div class="file-list" id="secretFilesList"></div>
           </div>
 
-          <div class="field"><label class="field-label">Frase maestra</label><input type="text" id="realPass" placeholder="al menos 6 caracteres, varias palabras"><div class="hint">No la guardamos en ningún lado. Si la olvidas, no hay recuperación — por diseño.</div></div>
+          <div class="field"><label class="field-label">Frase maestra</label><input type="text" id="realPass" placeholder="al menos 6 caracteres, varias palabras" autocapitalize="none" autocorrect="off" spellcheck="false" autocomplete="off"><div class="hint">No la guardamos en ningún lado. Si la olvidas, no hay recuperación — por diseño.</div></div>
 
           <div class="lock-zone" id="hiddenZone">
             <div class="toggle-row" id="hiddenToggleRow">
@@ -118,7 +118,7 @@
               <label class="switch"><input type="checkbox" id="hiddenToggle"><span class="sl"></span></label>
             </div>
             <div class="hidden-fields" id="hiddenFields">
-              <div class="field" style="margin-bottom:0;"><label class="field-label">Frase señuelo</label><input type="text" id="decoyPass" placeholder="otra frase distinta"></div>
+              <div class="field" style="margin-bottom:0;"><label class="field-label">Frase señuelo</label><input type="text" id="decoyPass" placeholder="otra frase distinta" autocapitalize="none" autocorrect="off" spellcheck="false" autocomplete="off"></div>
               <div class="field" style="margin-bottom:0;"><label class="field-label">Contenido señuelo</label><textarea id="decoyText" placeholder="ej. contraseñas viejas sin importancia"></textarea></div>
             </div>
           </div>
@@ -160,7 +160,7 @@
         <div class="lock-zone" id="bovedaZone">
           <div id="bovedaUnlocked">
             <p class="lead" style="margin-bottom:16px;">Reparte tu frase maestra en N partes; solo se necesitan K para reconstruirla.</p>
-            <div class="field"><label class="field-label">Frase a repartir</label><input type="text" id="shamirPass" placeholder="tu frase maestra real"></div>
+            <div class="field"><label class="field-label">Frase a repartir</label><input type="text" id="shamirPass" placeholder="tu frase maestra real" autocapitalize="none" autocorrect="off" spellcheck="false" autocomplete="off"></div>
             <div style="display:flex;gap:12px;">
               <div class="field" style="flex:1;"><label class="field-label">Total (N)</label><input type="number" id="shamirN" value="5" min="2" max="20"></div>
               <div class="field" style="flex:1;"><label class="field-label">Mínimas (K)</label><input type="number" id="shamirK" value="3" min="2" max="20"></div>
@@ -199,8 +199,9 @@
           <button class="btn btn-secondary btn-sm" id="liveCaptureBtn">Capturar ahora</button>
           <button class="btn btn-secondary btn-sm" id="liveResetBtn">Reiniciar escaneo</button>
         </div>
-        <div class="field" style="margin-top:6px;"><label class="field-label">Tu frase</label><input type="text" id="liveDecodePass" placeholder="la frase maestra o la señuelo"></div>
+        <div class="field" style="margin-top:6px;"><label class="field-label">Tu frase</label><input type="text" id="liveDecodePass" placeholder="la frase maestra o la señuelo" autocapitalize="none" autocorrect="off" spellcheck="false" autocomplete="off"></div>
         <button class="btn btn-primary" id="liveDecodeBtn" disabled>Descifrar (faltan 6)</button>
+        <div class="footnote" style="text-align:center;opacity:.55;margin-top:6px;">escáner v24</div>
         <div class="output-box hidden" id="liveDecodeOutput"><div class="reveal-box" id="liveDecodeReveal"></div></div>
       </div>
 
@@ -232,7 +233,7 @@
             <div class="chip" data-tier="pro"><div class="cname">Pro</div></div>
           </div>
 
-          <div class="field"><label class="field-label">Tu frase</label><input type="text" id="decodePass" placeholder="la frase maestra o la señuelo"></div>
+          <div class="field"><label class="field-label">Tu frase</label><input type="text" id="decodePass" placeholder="la frase maestra o la señuelo" autocapitalize="none" autocorrect="off" spellcheck="false" autocomplete="off"></div>
           <button class="btn btn-primary" id="decodeBtn">Descifrar</button>
           <div class="output-box hidden" id="decodeOutput"><div class="reveal-box" id="decodeReveal"></div></div>
         </div>

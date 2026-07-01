@@ -138,9 +138,52 @@ export async function buildPayload(opts){
   }
   return { payload, usableCapacity, slotLen, grid: tierInfo.grid, parity, kdf: useArgon2 ? KDF_ARGON2ID : KDF_PBKDF2 };
 }
+/* Variantes de la frase tal como la escriben los TECLADOS MÓVILES: mayúscula
+   inicial automática, espacio final al aceptar una sugerencia, dobles espacios,
+   comillas/apóstrofes "inteligentes" (curvos) y composición Unicode distinta
+   (NFC/NFD en acentos y ñ). El cubo se crea normalmente en el PC (frase limpia)
+   y se descifra en el teléfono (frase alterada sin que el usuario lo vea): la
+   frase "no coincide" aunque el usuario escribió lo correcto. Se prueba SIEMPRE
+   la frase exacta primero (retrocompatible) y luego las variantes des-alteradas. */
+function phraseVariants(passphrase){
+  const out = [];
+  const push = v => { if (v && !out.includes(v)) out.push(v); };
+  const straight = s => s.replace(/[‘’ʼ]/g, "'").replace(/[“”]/g, '"');
+  const bases = [passphrase, passphrase.trim(), passphrase.trim().replace(/\s+/g, ' ')];
+  for (const b of bases){
+    for (const q of [b, straight(b)]){
+      const deCap = q && q[0] !== q[0].toLowerCase() ? q[0].toLowerCase() + q.slice(1) : q;
+      for (const c of [q, deCap]){ push(c); push(c.normalize('NFC')); }
+    }
+  }
+  return out;
+}
+/** Descifra probando la frase EXACTA y, si falla, variantes que deshacen las
+ * alteraciones típicas del teclado móvil. Devuelve además `usedPhrase` y
+ * `phraseAdjusted` para que la UI pueda avisar de que el teclado alteró la frase. */
 export async function tryDecryptPayload(payload, passphrase){
+  const variants = phraseVariants(passphrase);
+  let lastErr = null;
+  for (const variant of variants){
+    try{
+      const result = await tryDecryptPayloadExact(payload, variant);
+      result.usedPhrase = variant;
+      result.phraseAdjusted = variant !== passphrase;
+      return result;
+    } catch(e){
+      lastErr = e;
+      if (e && e.code === 'bad-format') throw e; // el formato no depende de la frase
+    }
+  }
+  throw lastErr || new Error('Frase incorrecta.');
+}
+export async function tryDecryptPayloadExact(payload, passphrase){
   const magicOk = payload[0]===MAGIC[0] && payload[1]===MAGIC[1] && payload[2]===MAGIC[2];
-  if (!magicOk) throw new Error('El cubo no es legible: formato no reconocido.');
+  if (!magicOk){
+    const err = new Error('El cubo no es legible: formato no reconocido.');
+    err.code = 'bad-format';
+    throw err;
+  }
   const hiddenEnabled = (payload[3] & FLAG_HIDDEN) !== 0;
   const useArgon2 = (payload[3] & FLAG_KDF_ARGON2ID) !== 0;
   if (useArgon2 && !isArgon2Available()){
@@ -177,7 +220,9 @@ export async function tryDecryptPayload(payload, passphrase){
       return { text, slot:'oculto', kdf };
     } catch(_){}
   }
-  throw new Error('Frase incorrecta, o el cubo está dañado más allá de lo recuperable.');
+  const err = new Error('Frase incorrecta, o el cubo está dañado más allá de lo recuperable.');
+  err.code = 'bad-phrase';
+  throw err;
 }
 export function payloadToColorIndices(payload){
   const bits=[]; for (const byte of payload){ for(let i=7;i>=0;i--) bits.push((byte>>i)&1); }

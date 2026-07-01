@@ -378,10 +378,18 @@ export function createLiveScanner(config){
     try{ report = diagnoseCanonicalFaces({ ...captured }, TIERS); } catch(_){ /* sin reporte */ }
     const grid = report ? report.grid : 24;
     const boxes = dataSampleBoxes(grid);
-    const TILE = 240, PAD = 12, COLS = 3, ROWS = 2, HEAD = 64, FOOT = 22;
-    const W = PAD + COLS * (TILE + PAD), H = HEAD + ROWS * (TILE + PAD + FOOT);
+    // Dos secciones: arriba las caras en pequeño CON la rejilla magenta (para ojos
+    // humanos) y abajo las 6 caras a RESOLUCIÓN COMPLETA y SIN dibujar nada encima
+    // (para análisis a máquina: test/analyze-diagnostic.mjs relee estas baldosas y
+    // re-ejecuta el decodificador real fuera del teléfono). El layout DEBE coincidir
+    // con las constantes de ese script.
+    const TILE = 240, PAD = 12, COLS = 3, ROWS = 2, HEAD = 64, FOOT = 22, RAW = 600, LABEL = 20;
+    const humanH = ROWS * (TILE + PAD + FOOT);
+    const rawY0 = HEAD + humanH + LABEL;
+    const W = PAD + COLS * (RAW + PAD), H = rawY0 + ROWS * (RAW + PAD);
     const cv = document.createElement('canvas'); cv.width = W; cv.height = H;
     const ctx = cv.getContext('2d');
+    ctx.imageSmoothingEnabled = false;
     ctx.fillStyle = '#111'; ctx.fillRect(0, 0, W, H);
     ctx.fillStyle = '#fff'; ctx.textBaseline = 'top'; ctx.font = '600 15px sans-serif';
     ctx.fillText(`Diagnóstico — capacidad ${report ? report.tier : '?'} (grid ${grid}) · bloques mal: ${report ? report.failedBlocks + '/' + report.numBlocks : '?'}`, PAD, 12);
@@ -391,8 +399,9 @@ export function createLiveScanner(config){
       const col = f % COLS, row = (f / COLS) | 0;
       const x = PAD + col * (TILE + PAD), y = HEAD + row * (TILE + PAD + FOOT);
       const canon = captured[f];
+      let tc = null;
       if (canon){
-        const tc = document.createElement('canvas'); tc.width = canon.size; tc.height = canon.size;
+        tc = document.createElement('canvas'); tc.width = canon.size; tc.height = canon.size;
         tc.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(canon.data), canon.size, canon.size), 0, 0);
         ctx.drawImage(tc, x, y, TILE, TILE);
         ctx.strokeStyle = 'rgba(255,0,255,0.55)'; ctx.lineWidth = 1;
@@ -403,7 +412,13 @@ export function createLiveScanner(config){
       ctx.fillStyle = '#fff'; ctx.font = '600 12px sans-serif';
       const fail = report ? report.perFaceFailed[f] : '?', tot = report ? report.perFaceTotal[f] : '?';
       ctx.fillText(`cara ${f + 1}: ${fail}/${tot} bloques mal`, x, y + TILE + 4);
+      // Sección a máquina: baldosa a resolución completa, sin rejilla encima.
+      const rx = PAD + col * (RAW + PAD), ry = rawY0 + row * (RAW + PAD);
+      if (tc) ctx.drawImage(tc, rx, ry, RAW, RAW);
+      else { ctx.fillStyle = '#400'; ctx.fillRect(rx, ry, RAW, RAW); }
     }
+    ctx.fillStyle = '#bbb'; ctx.font = '12px sans-serif';
+    ctx.fillText('Abajo: caras a resolución completa (para análisis del desarrollador). Envía el PNG como ARCHIVO, sin comprimir.', PAD, HEAD + humanH + 4);
     return cv.toDataURL('image/png');
   }
 
@@ -435,7 +450,7 @@ export function createLiveScanner(config){
     lastDiagnosticUrl = url;
     els.diag.innerHTML = '';
     const p = document.createElement('div'); p.className = 'scan-diag-note';
-    p.textContent = 'No se pudo descifrar. Descarga esta imagen y envíasela al desarrollador: muestra exactamente lo que ve el escáner.';
+    p.textContent = 'No se pudo leer el cubo. Descarga esta imagen y hazla llegar al desarrollador COMO ARCHIVO (no como foto: WhatsApp/etc. la recomprimen y destruyen los datos): muestra exactamente lo que ve el escáner.';
     const img = document.createElement('img'); img.src = url; img.className = 'scan-diag-img';
     const a = document.createElement('a'); a.href = url; a.download = 'ciphercube-diagnostico.png';
     a.textContent = '⬇ Descargar diagnóstico'; a.className = 'btn-secondary scan-diag-dl';
@@ -521,6 +536,8 @@ export function createLiveScanner(config){
     isRunning: () => running,
     /** Para pruebas e integración: inyecta una cara ya enderezada. */
     injectCanonicalFace(faceIndex, canon){ captured[faceIndex] = canon; if (els) renderProgress(); },
+    /** Para pruebas: genera la imagen de diagnóstico con las caras actuales. */
+    diagnosticDataURL: buildDiagnosticDataURL,
   };
 }
 
@@ -580,7 +597,18 @@ const cubeScanner = createLiveScanner({
       try{ ({ payload } = decodeCanonicalFaces(canonByFace, TIERS)); }
       catch(e){ e.scanFailed = true; throw e; }
     }
-    const result = await tryDecryptPayload(payload, pass);
+    let result;
+    try{ result = await tryDecryptPayload(payload, pass); }
+    catch(e){
+      // El cubo ya se RECONSTRUYÓ (Reed-Solomon validó): el escaneo está bien y
+      // el fallo es SOLO de frase. Decirlo explícito — durante mucho tiempo este
+      // error culpaba al escáner y mandaba al usuario a re-escanear en balde.
+      if (e && e.code === 'bad-phrase'){
+        throw new Error('El cubo se LEYÓ correctamente — el escaneo está bien. Lo que no coincide es la FRASE: debe ser exacta a la de creación (ya probé también variantes sin mayúscula inicial ni espacios extra del teclado). Cópiala tal cual la guardaste.');
+      }
+      throw e;
+    }
+    if (result.phraseAdjusted) showToast('Tu teclado había alterado la frase (mayúscula o espacio de más); se corrigió sola.');
     renderCubeReveal(result.text);
     document.getElementById('liveDecodeOutput').classList.remove('hidden');
   },
@@ -589,3 +617,5 @@ const cubeScanner = createLiveScanner({
 export function initLiveScanner(){ cubeScanner.init(); }
 export function startLiveScanner(){ cubeScanner.start(); }
 export function stopLiveScanner(){ cubeScanner.stop(); }
+/** Solo depuración/pruebas: acceso a la instancia del escáner del cubo. */
+export function debugCubeScanner(){ return cubeScanner; }
